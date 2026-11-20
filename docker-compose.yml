@@ -1,0 +1,15 @@
+services:
+  audiolead:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - DB_PATH=/app/data/audiolead.db
+      # - APP_PASSCODE=change-me-before-hosting
+    volumes:
+      - audiolead_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  audiolead_data:

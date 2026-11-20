@@ -1,0 +1,19 @@
+{
+  "name": "audiolead",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Publisher lead generation helper for discovering, qualifying, suppressing, and extracting decision-maker contacts for article audio reader outreach.",
+  "scripts": {
+    "dev": "concurrently -n server,client -c cyan,magenta \"pnpm --filter @audiolead/server dev\" \"pnpm --filter @audiolead/client dev\"",
+    "build": "pnpm --filter @audiolead/shared build && pnpm --filter @audiolead/client build && pnpm --filter @audiolead/server build",
+    "start": "node server/dist/index.js",
+    "test": "pnpm --filter @audiolead/server test",
+    "typecheck": "pnpm --filter @audiolead/shared typecheck && pnpm --filter @audiolead/server typecheck && pnpm --filter @audiolead/client typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

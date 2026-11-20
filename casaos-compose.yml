@@ -1,0 +1,49 @@
+name: audiolead
+services:
+  audiolead:
+    cpu_shares: 90
+    command: []
+    container_name: audiolead
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DB_PATH: /app/data/audiolead.db
+      TZ: Asia/Manila
+    hostname: audiolead
+    image: ghcr.io/janlofredy/audiolead:latest
+    labels:
+      icon: https://raw.githubusercontent.com/janlofredy/audiolead/main/client/public/icon.svg
+    network_mode: bridge
+    ports:
+      - target: 3000
+        published: "3450"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /DATA/AppData/audiolead
+        target: /app/data
+networks:
+  default:
+    name: audiolead_default
+x-casaos:
+  architectures:
+    - amd64
+  author: janlofredy
+  category: Productivity
+  description:
+    en_us: Publisher lead generation helper for discovering ad-monetized article sites without audio readers, enforcing Already Contacted cooldowns and Opt-Out lists, and finding ranked decision-maker contact emails.
+  developer: janlofredy
+  hostname: ""
+  icon: https://raw.githubusercontent.com/janlofredy/audiolead/main/client/public/icon.svg
+  index: /
+  is_uncontrolled: false
+  main: audiolead
+  port_map: "3450"
+  scheme: http
+  store_app_id: audiolead
+  tagline:
+    en_us: Publisher discovery, suppression & decision-maker contact finder
+  title:
+    custom: ""
+    en_us: AudioLead
