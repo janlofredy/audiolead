@@ -47,6 +47,7 @@ export function LeadDetailDialog({
   const [parentCompanyInput, setParentCompanyInput] = useState('');
   const [notesInput, setNotesInput] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
+  const [suppressingCompany, setSuppressingCompany] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -97,6 +98,37 @@ export function LeadDetailDialog({
       onNotify('error', err instanceof Error ? err.message : 'Could not update lead');
     } finally {
       setSavingMeta(false);
+    }
+  };
+
+  const handleSuppressParentCompany = async () => {
+    if (!lead) return;
+    const company = parentCompanyInput.trim() || lead.parentCompany?.trim() || '';
+    if (!company) {
+      onNotify('error', 'Enter or detect a Parent Company name first.');
+      return;
+    }
+
+    setSuppressingCompany(true);
+    try {
+      if (parentCompanyInput.trim() !== (lead.parentCompany ?? '')) {
+        await api.updateLead(lead.id, { parentCompany: company });
+      }
+      const res = await api.addParentCompanySuppression({
+        companyName: company,
+        type: 'opt_out',
+        reason: `Suppressed from ${lead.domain}`,
+      });
+      await loadLead(lead.id);
+      onLeadChanged();
+      onNotify(
+        'success',
+        `Suppressed parent company "${company}" (${res.leadsAffected} lead(s) synced)`,
+      );
+    } catch (err) {
+      onNotify('error', err instanceof Error ? err.message : 'Could not suppress parent company');
+    } finally {
+      setSuppressingCompany(false);
     }
   };
 
@@ -417,6 +449,15 @@ export function LeadDetailDialog({
                 <p className="mt-1 text-xs text-slate-500">
                   Used for Parent Company suppression matching
                 </p>
+                <button
+                  type="button"
+                  onClick={handleSuppressParentCompany}
+                  disabled={suppressingCompany || !(parentCompanyInput.trim() || lead.parentCompany)}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                >
+                  <Ban className="h-3.5 w-3.5" aria-hidden="true" />
+                  {suppressingCompany ? 'Suppressing...' : 'Suppress Parent Co. (DNC)'}
+                </button>
               </div>
               <div>
                 <label htmlFor="detail-notes" className="block text-xs font-semibold uppercase tracking-wide text-slate-600">

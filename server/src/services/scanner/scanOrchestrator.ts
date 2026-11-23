@@ -23,6 +23,12 @@ import { evaluateQualification } from './qualificationEngine.js';
 import { detectParentCompany } from './parentCompanyDetector.js';
 import { mineOutboundSuggestions } from '../discovery/outboundMiner.js';
 
+interface QueuedScanEntry {
+  leadId: string;
+  forceRescan: boolean;
+  notBefore: number;
+}
+
 interface ActiveJob {
   jobId: string;
   total: number;
@@ -30,10 +36,13 @@ interface ActiveJob {
   done: boolean;
   emitter: EventEmitter;
   events: ScanProgressEvent[];
+  queue: QueuedScanEntry[];
+  enqueuedIds: Set<string>;
 }
 
 export class ScanOrchestrator {
   private jobs = new Map<string, ActiveJob>();
+  private activeJobId: string | null = null;
 
   constructor(private db: AppDatabase) {}
 
@@ -43,12 +52,58 @@ export class ScanOrchestrator {
     return { jobId: job.jobId, total: job.total, completed: job.completed, done: job.done };
   }
 
+  getActiveJobSummary(): ScanJobSummary | null {
+    if (!this.activeJobId) return null;
+    const job = this.jobs.get(this.activeJobId);
+    if (!job || job.done) return null;
+    return { jobId: job.jobId, total: job.total, completed: job.completed, done: job.done };
+  }
+
   getJobEmitter(jobId: string): ActiveJob | null {
     return this.jobs.get(jobId) ?? null;
   }
 
+  resumePendingOnStartup(): ScanJobSummary | null {
+    const leadsRepo = new LeadsRepo(this.db);
+    leadsRepo.resetInterruptedScans();
+    const pendingIds = leadsRepo.getPendingLeadIds(500);
+    if (pendingIds.length === 0) return null;
+    return this.startJob(pendingIds);
+  }
+
   startJob(leadIds: string[], options?: { forceRescan?: boolean }): ScanJobSummary {
     const uniqueIds = Array.from(new Set(leadIds));
+    const forceRescan = Boolean(options?.forceRescan);
+
+    if (this.activeJobId) {
+      const existing = this.jobs.get(this.activeJobId);
+      if (existing && !existing.done) {
+        const added = uniqueIds.filter((id) => !existing.enqueuedIds.has(id));
+        for (const id of added) {
+          existing.enqueuedIds.add(id);
+          existing.queue.push({ leadId: id, forceRescan, notBefore: 0 });
+        }
+        if (added.length > 0) {
+          existing.total += added.length;
+          const ev: ScanProgressEvent = {
+            jobId: existing.jobId,
+            type: 'lead_progress',
+            total: existing.total,
+            completed: existing.completed,
+            stage: `Queued ${added.length} additional site(s)`,
+          };
+          existing.events.push(ev);
+          existing.emitter.emit('event', ev);
+        }
+        return {
+          jobId: existing.jobId,
+          total: existing.total,
+          completed: existing.completed,
+          done: existing.done,
+        };
+      }
+    }
+
     const jobId = nanoid(10);
     const job: ActiveJob = {
       jobId,
@@ -57,6 +112,8 @@ export class ScanOrchestrator {
       done: false,
       emitter: new EventEmitter(),
       events: [],
+      queue: uniqueIds.map((leadId) => ({ leadId, forceRescan, notBefore: 0 })),
+      enqueuedIds: new Set(uniqueIds),
     };
     this.jobs.set(jobId, job);
 
@@ -84,45 +141,40 @@ export class ScanOrchestrator {
       return { jobId, total: 0, completed: 0, done: true };
     }
 
-    // Run asynchronously with concurrency = 3
-    void this.runQueue(job, uniqueIds, Boolean(options?.forceRescan), emitEvent);
+    this.activeJobId = jobId;
+    // Run asynchronously in server background with concurrency = 3
+    void this.runQueue(job, emitEvent);
 
     return { jobId, total: job.total, completed: 0, done: false };
   }
 
   private async runQueue(
     job: ActiveJob,
-    leadIds: string[],
-    forceRescan: boolean,
     emitEvent: (ev: ScanProgressEvent) => void,
   ): Promise<void> {
     const MAX_RETRIES = 2;
-    const queue: Array<{ leadId: string; notBefore: number }> = leadIds.map((leadId) => ({
-      leadId,
-      notBefore: 0,
-    }));
     const attempts = new Map<string, number>();
-    const concurrency = Math.min(3, queue.length);
+    const concurrency = Math.min(3, Math.max(1, job.queue.length));
 
     const workers = Array.from({ length: concurrency }, async () => {
-      while (queue.length > 0) {
+      while (job.queue.length > 0) {
         const now = Date.now();
-        const readyIndex = queue.findIndex((item) => item.notBefore <= now);
+        const readyIndex = job.queue.findIndex((item) => item.notBefore <= now);
         if (readyIndex === -1) {
-          const earliest = Math.min(...queue.map((item) => item.notBefore));
+          const earliest = Math.min(...job.queue.map((item) => item.notBefore));
           const waitMs = Math.min(1_000, Math.max(50, earliest - now));
           await new Promise((r) => setTimeout(r, waitMs));
           continue;
         }
 
-        const [entry] = queue.splice(readyIndex, 1);
+        const [entry] = job.queue.splice(readyIndex, 1);
         if (!entry) break;
 
         const attempt = attempts.get(entry.leadId) ?? 0;
         const outcome = await this.scanSingleLead(
           job,
           entry.leadId,
-          forceRescan,
+          entry.forceRescan,
           attempt,
           emitEvent,
         );
@@ -130,8 +182,9 @@ export class ScanOrchestrator {
         if (outcome?.requeue && attempt < MAX_RETRIES) {
           const nextAttempt = attempt + 1;
           attempts.set(entry.leadId, nextAttempt);
-          queue.push({
+          job.queue.push({
             leadId: entry.leadId,
+            forceRescan: entry.forceRescan,
             notBefore: Date.now() + outcome.delayMs * nextAttempt,
           });
           emitEvent({
@@ -163,6 +216,9 @@ export class ScanOrchestrator {
 
     await Promise.all(workers);
     job.done = true;
+    if (this.activeJobId === job.jobId) {
+      this.activeJobId = null;
+    }
     emitEvent({
       jobId: job.jobId,
       type: 'job_done',

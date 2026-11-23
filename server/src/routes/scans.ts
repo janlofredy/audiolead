@@ -8,6 +8,10 @@ import type { ScanOrchestrator } from '../services/scanner/scanOrchestrator.js';
 export function createScansRoutes(db: AppDatabase, orchestrator: ScanOrchestrator): Hono {
   const app = new Hono();
 
+  app.get('/active', (c) => {
+    return c.json({ job: orchestrator.getActiveJobSummary() });
+  });
+
   app.post('/start', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       leadIds?: string[];

@@ -230,6 +230,10 @@ export const api = {
   },
 
   // Scans
+  getActiveScan(): Promise<{ job: ScanJobSummary | null }> {
+    return requestJson('/api/scans/active');
+  },
+
   startScan(payload: {
     leadIds?: string[];
     scanPending?: boolean;

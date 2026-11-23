@@ -1542,6 +1542,13 @@ export class LeadsRepo {
     return rows.map((r) => r.id);
   }
 
+  resetInterruptedScans(): number {
+    const info = this.db
+      .prepare("UPDATE leads SET status = 'pending', updated_at = datetime('now') WHERE status = 'scanning'")
+      .run();
+    return info.changes;
+  }
+
   getRetryableFailedLeadIds(limit = 250): string[] {
     const rows = this.db
       .prepare(

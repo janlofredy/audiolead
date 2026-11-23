@@ -56,13 +56,6 @@ export function App() {
     }
   }, [notify]);
 
-  useEffect(() => {
-    void refreshPipeline();
-    return () => {
-      scanUnsubRef.current?.();
-    };
-  }, [refreshPipeline]);
-
   const attachScanJob = useCallback(
     (jobId: string) => {
       scanUnsubRef.current?.();
@@ -86,6 +79,23 @@ export function App() {
     },
     [notify, refreshPipeline],
   );
+
+  useEffect(() => {
+    void refreshPipeline();
+    void (async () => {
+      try {
+        const res = await api.getActiveScan();
+        if (res.job && !res.job.done) {
+          attachScanJob(res.job.jobId);
+        }
+      } catch {
+        // ignore startup active-scan check errors
+      }
+    })();
+    return () => {
+      scanUnsubRef.current?.();
+    };
+  }, [refreshPipeline, attachScanJob]);
 
   const handleQueuedAndScan = async (jobId: string | null, addedCount: number) => {
     await refreshPipeline();

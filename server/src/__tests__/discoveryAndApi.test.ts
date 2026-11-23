@@ -272,4 +272,22 @@ describe('discovery, suppression & API integration', () => {
     expect(list[0].domain).toBe('high-traffic-pub.com');
     expect(list[0].estimatedVisits).toBe(600_000);
   });
+
+  it('exposes /api/scans/active and resets interrupted scanning leads to pending', async () => {
+    const db = createDatabase(':memory:');
+    const app = createApp(db);
+    const leadsRepo = new LeadsRepo(db);
+
+    const activeRes = await app.request('/api/scans/active');
+    expect(activeRes.status).toBe(200);
+    expect(await activeRes.json()).toEqual({ job: null });
+
+    const { createdIds } = leadsRepo.createPending([{ domain: 'interrupted-site.com' }]);
+    leadsRepo.markStatus(createdIds[0], 'scanning');
+    expect(leadsRepo.getPendingLeadIds(10)).toHaveLength(0);
+
+    const resetCount = leadsRepo.resetInterruptedScans();
+    expect(resetCount).toBe(1);
+    expect(leadsRepo.getPendingLeadIds(10)).toEqual([createdIds[0]]);
+  });
 });
