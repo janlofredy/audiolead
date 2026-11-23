@@ -21,7 +21,11 @@ export function reconcileLeadsWithSuppression(
 
   for (const lead of leads) {
     if (targetSet && !targetSet.has(lead.domain)) continue;
-    const sup = supRepo.checkDomain(lead.domain, settings.contactedCooldownDays);
+    const sup = supRepo.checkDomainAndCompany(
+      lead.domain,
+      lead.parentCompany,
+      settings.contactedCooldownDays,
+    );
 
     if (sup.status === 'opted_out' || sup.status === 'cooldown') {
       const qual = evaluateQualification({
@@ -132,7 +136,11 @@ export function backfillTrancoVisitEstimates(db: AppDatabase): number {
     let nextSummary = lead.qualificationSummary;
 
     if (lead.lastScannedAt !== null) {
-      const sup = supRepo.checkDomain(lead.domain, settings.contactedCooldownDays);
+      const sup = supRepo.checkDomainAndCompany(
+        lead.domain,
+        lead.parentCompany,
+        settings.contactedCooldownDays,
+      );
       const qual = evaluateQualification({
         settings,
         suppression: sup,

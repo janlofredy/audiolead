@@ -82,6 +82,21 @@ export interface SuppressionRule {
   daysRemaining: number | null;
 }
 
+export interface ParentCompanySuppressionRule {
+  id: string;
+  companyName: string;
+  normalizedName: string;
+  type: SuppressionType;
+  eventDate: string; // YYYY-MM-DD
+  reason: string | null;
+  source: 'import' | 'manual' | 'pipeline';
+  createdAt: string;
+  updatedAt: string;
+  liveState: SuppressionLiveState;
+  expiresAt: string | null;
+  daysRemaining: number | null;
+}
+
 export interface SuppressionCheckResult {
   status: 'clear' | 'cooldown' | 'opted_out' | 'cooldown_expired';
   type: SuppressionType | null;
@@ -89,6 +104,7 @@ export interface SuppressionCheckResult {
   expiresAt: string | null;
   daysRemaining: number | null;
   reason: string | null;
+  matchedParentCompany?: string | null;
 }
 
 export interface SuppressionPreviewItem {
@@ -149,6 +165,7 @@ export interface Lead {
   url: string;
   siteTitle: string | null;
   description: string | null;
+  parentCompany: string | null;
   discoverySource: string;
   status: LeadStatus;
   verdict: QualificationVerdict;

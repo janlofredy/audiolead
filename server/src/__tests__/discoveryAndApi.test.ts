@@ -3,8 +3,9 @@ import { createDatabase } from '../db/index.js';
 import { createApp } from '../app.js';
 import { parseSimilarwebPaste } from '../services/discovery/similarwebParser.js';
 import { addDaysToIsoDate, todayIsoDate } from '../services/scanner/domainUtils.js';
-import { LeadsRepo } from '../db/repositories.js';
+import { LeadsRepo, SuggestionsRepo, TrancoRepo } from '../db/repositories.js';
 import { backfillTrancoVisitEstimates } from '../services/suppression/reconcile.js';
+import { mineOutboundSuggestions } from '../services/discovery/outboundMiner.js';
 
 describe('discovery, suppression & API integration', () => {
   it('parses Similarweb paste text and tags suppression/pipeline state accurately', () => {
@@ -210,5 +211,65 @@ describe('discovery, suppression & API integration', () => {
     const manualLead = leadsRepo.getById(manualId, 90);
     expect(manualLead?.monthlyVisits).toBe(95_000);
     expect(manualLead?.visitsSource).toBe('manual');
+  });
+
+  it('supports configurable bulk-queue limits and all-batch queueing for suggestions', async () => {
+    const db = createDatabase(':memory:');
+    const app = createApp(db);
+    const suggestionsRepo = new SuggestionsRepo(db);
+
+    const items = Array.from({ length: 15 }, (_, idx) => ({
+      domain: `suggested-site-${idx + 1}.com`,
+      sampleUrl: `https://suggested-site-${idx + 1}.com`,
+      sourceType: 'outbound_mine' as const,
+      sourceDomain: 'seed-publisher.com',
+    }));
+    const inserted = suggestionsRepo.addMany(items, 90);
+    expect(inserted).toBe(15);
+
+    const firstBatchRes = await app.request('/api/discovery/suggestions/bulk-queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 12, autoScan: false }),
+    });
+    expect(firstBatchRes.status).toBe(200);
+    const firstBatchJson = (await firstBatchRes.json()) as { addedCount: number };
+    expect(firstBatchJson.addedCount).toBe(12);
+
+    const remainingRes = await app.request('/api/discovery/suggestions/bulk-queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 'all', autoScan: false }),
+    });
+    expect(remainingRes.status).toBe(200);
+    const remainingJson = (await remainingRes.json()) as { addedCount: number };
+    expect(remainingJson.addedCount).toBe(3);
+  });
+
+  it('filters outbound suggestions to high-traffic sites using Tranco rank', async () => {
+    const db = createDatabase(':memory:');
+    const trancoRepo = new TrancoRepo(db);
+    trancoRepo.setCached('high-traffic-pub.com', 100_000); // ~600K/mo
+    trancoRepo.setCached('low-traffic-blog.com', 900_000); // ~35K/mo (< 50K)
+    trancoRepo.setCached('unranked-site.com', null);
+
+    const added = await mineOutboundSuggestions(db, {
+      sourceLeadId: 'seed-1',
+      sourceDomain: 'seed-pub.com',
+      outboundLinks: [
+        'https://high-traffic-pub.com/article',
+        'https://low-traffic-blog.com/post',
+        'https://unranked-site.com/news',
+      ],
+      excludeMegaPublishers: true,
+      cooldownDays: 90,
+      minMonthlyVisits: 50_000,
+    });
+
+    expect(added).toBe(1);
+    const list = new SuggestionsRepo(db).list(90, 'new');
+    expect(list).toHaveLength(1);
+    expect(list[0].domain).toBe('high-traffic-pub.com');
+    expect(list[0].estimatedVisits).toBe(600_000);
   });
 });

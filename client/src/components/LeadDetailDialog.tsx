@@ -38,6 +38,7 @@ export function LeadDetailDialog({
   const [lead, setLead] = useState<LeadWithContacts | null>(null);
   const [loading, setLoading] = useState(false);
   const [visitsInput, setVisitsInput] = useState('');
+  const [parentCompanyInput, setParentCompanyInput] = useState('');
   const [notesInput, setNotesInput] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
   const [enriching, setEnriching] = useState(false);
@@ -56,6 +57,7 @@ export function LeadDetailDialog({
       const res = await api.getLead(id);
       setLead(res.lead);
       setVisitsInput(res.lead.monthlyVisits !== null ? String(res.lead.monthlyVisits) : '');
+      setParentCompanyInput(res.lead.parentCompany ?? '');
       setNotesInput(res.lead.notes ?? '');
     } catch (err) {
       onNotify('error', err instanceof Error ? err.message : 'Failed to load lead');
@@ -79,6 +81,7 @@ export function LeadDetailDialog({
     try {
       const res = await api.updateLead(lead.id, {
         monthlyVisits: visitsInput.trim() === '' ? null : visitsInput.trim(),
+        parentCompany: parentCompanyInput.trim() || null,
         notes: notesInput,
       });
       setLead(res.lead);
@@ -369,7 +372,7 @@ export function LeadDetailDialog({
 
           {/* Traffic & Notes form */}
           <form onSubmit={handleSaveMeta} className="rounded-xl border border-slate-200 p-4 space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <label htmlFor="detail-visits" className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
                   Monthly Visits (from Similarweb)
@@ -391,6 +394,22 @@ export function LeadDetailDialog({
                     ? `~${formatVisits(lead.monthlyVisits)} (Tranco estimate)`
                     : formatVisits(lead.monthlyVisits)}{' '}
                   · Updates qualification automatically
+                </p>
+              </div>
+              <div>
+                <label htmlFor="detail-parent-company" className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  Parent Company
+                </label>
+                <input
+                  id="detail-parent-company"
+                  type="text"
+                  value={parentCompanyInput}
+                  onChange={(e) => setParentCompanyInput(e.target.value)}
+                  placeholder="e.g. Valnet, Static Media"
+                  className="app-input mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Used for Parent Company suppression matching
                 </p>
               </div>
               <div>

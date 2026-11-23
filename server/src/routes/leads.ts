@@ -20,6 +20,7 @@ import { enrichDomainWithApis } from '../services/scanner/enrichmentService.js';
 
 const updateLeadSchema = z.object({
   monthlyVisits: z.union([z.number(), z.string(), z.null()]).optional(),
+  parentCompany: z.string().nullable().optional(),
   status: z
     .enum([
       'pending',
@@ -221,7 +222,16 @@ export function createLeadsRoutes(db: AppDatabase): Hono {
       new SuggestionsRepo(db).dismissMatchingDomains([existing.domain]);
     }
 
-    const latestSup = supRepo.checkDomain(existing.domain, settings.contactedCooldownDays);
+    const nextParentCompany =
+      parsed.data.parentCompany !== undefined
+        ? parsed.data.parentCompany?.trim() || null
+        : existing.parentCompany;
+
+    const latestSup = supRepo.checkDomainAndCompany(
+      existing.domain,
+      nextParentCompany,
+      settings.contactedCooldownDays,
+    );
 
     let nextVerdict = existing.verdict;
     let nextScore = existing.qualificationScore;
@@ -229,6 +239,7 @@ export function createLeadsRoutes(db: AppDatabase): Hono {
 
     if (
       parsed.data.monthlyVisits !== undefined ||
+      parsed.data.parentCompany !== undefined ||
       parsed.data.status === 'opted_out' ||
       parsed.data.status === 'contacted'
     ) {
@@ -268,6 +279,7 @@ export function createLeadsRoutes(db: AppDatabase): Hono {
     leadsRepo.updateLeadFields(id, {
       monthlyVisits: parsed.data.monthlyVisits !== undefined ? nextVisits : undefined,
       visitsSource: parsed.data.monthlyVisits !== undefined ? nextVisitsSource : undefined,
+      parentCompany: parsed.data.parentCompany !== undefined ? nextParentCompany : undefined,
       status: nextStatus,
       verdict: nextVerdict,
       qualificationScore: nextScore,

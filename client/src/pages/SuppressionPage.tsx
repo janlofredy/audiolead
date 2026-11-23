@@ -2,12 +2,14 @@ import { useEffect, useState, type ChangeEvent, type FormEvent, type KeyboardEve
 import {
   AlertTriangle,
   Ban,
+  Building2,
   Clock,
   Plus,
   Trash2,
   Upload,
 } from 'lucide-react';
 import type {
+  ParentCompanySuppressionRule,
   SuppressionImportPreview,
   SuppressionRule,
   SuppressionType,
@@ -25,8 +27,9 @@ export function SuppressionPage({
   onSuppressionChanged,
   onNotify,
 }: SuppressionPageProps) {
-  const [activeTab, setActiveTab] = useState<SuppressionType>('contacted');
+  const [activeTab, setActiveTab] = useState<SuppressionType | 'companies'>('contacted');
   const [rules, setRules] = useState<SuppressionRule[]>([]);
+  const [companyRules, setCompanyRules] = useState<ParentCompanySuppressionRule[]>([]);
   const [cooldownDays, setCooldownDays] = useState(90);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -36,6 +39,12 @@ export function SuppressionPage({
   const [singleDate, setSingleDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [singleReason, setSingleReason] = useState('');
 
+  // Parent company add
+  const [companyName, setCompanyName] = useState('');
+  const [companyType, setCompanyType] = useState<SuppressionType>('opt_out');
+  const [companyDate, setCompanyDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [companyReason, setCompanyReason] = useState('');
+
   // Bulk import
   const [rawPaste, setRawPaste] = useState('');
   const [preview, setPreview] = useState<SuppressionImportPreview | null>(null);
@@ -44,9 +53,15 @@ export function SuppressionPage({
   const loadRules = async () => {
     setLoading(true);
     try {
-      const res = await api.getSuppressionRules({ type: activeTab, q: searchQuery });
-      setRules(res.rules);
-      setCooldownDays(res.contactedCooldownDays);
+      if (activeTab === 'companies') {
+        const res = await api.getParentCompanySuppressions({ q: searchQuery });
+        setCompanyRules(res.rules);
+        setCooldownDays(res.contactedCooldownDays);
+      } else {
+        const res = await api.getSuppressionRules({ type: activeTab, q: searchQuery });
+        setRules(res.rules);
+        setCooldownDays(res.contactedCooldownDays);
+      }
     } catch (err) {
       onNotify('error', err instanceof Error ? err.message : 'Failed to load suppression list');
     } finally {
@@ -68,15 +83,20 @@ export function SuppressionPage({
   }, [searchQuery]);
 
   const handleTabKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    const order: Array<SuppressionType | 'companies'> = ['contacted', 'opt_out', 'companies'];
+    const idx = order.indexOf(activeTab);
+    if (e.key === 'ArrowRight') {
       e.preventDefault();
-      setActiveTab(activeTab === 'contacted' ? 'opt_out' : 'contacted');
+      setActiveTab(order[(idx + 1) % order.length]);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setActiveTab(order[(idx - 1 + order.length) % order.length]);
     }
   };
 
   const handleSingleAdd = async (e: FormEvent) => {
     e.preventDefault();
-    if (!singleDomain.trim()) return;
+    if (activeTab === 'companies' || !singleDomain.trim()) return;
     try {
       const res = await api.addSingleSuppression({
         domain: singleDomain.trim(),
@@ -100,7 +120,7 @@ export function SuppressionPage({
 
   const handlePreviewPaste = async (e: FormEvent) => {
     e.preventDefault();
-    if (!rawPaste.trim()) return;
+    if (activeTab === 'companies' || !rawPaste.trim()) return;
     try {
       const res = await api.previewSuppressionText(activeTab, rawPaste);
       setPreview(res);
@@ -111,7 +131,7 @@ export function SuppressionPage({
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || activeTab === 'companies') return;
     try {
       const res = await api.previewSuppressionFile(activeTab, file);
       setPreview(res);
@@ -180,6 +200,56 @@ export function SuppressionPage({
     }
   };
 
+  const handleAddCompany = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!companyName.trim()) return;
+    try {
+      const res = await api.addParentCompanySuppression({
+        companyName: companyName.trim(),
+        type: companyType,
+        eventDate: companyDate,
+        reason: companyReason.trim() || null,
+      });
+      if (res.status === 'protected_opt_out') {
+        onNotify('error', `${companyName} is permanently Opted Out and cannot be downgraded to Contacted.`);
+      } else {
+        onNotify(
+          'success',
+          `Saved ${res.rule.companyName} (${res.leadsAffected} pipeline lead(s) synced)`,
+        );
+      }
+      setCompanyName('');
+      setCompanyReason('');
+      await loadRules();
+      onSuppressionChanged();
+    } catch (err) {
+      onNotify('error', err instanceof Error ? err.message : 'Could not add parent company');
+    }
+  };
+
+  const handleUpdateCompanyDate = async (rule: ParentCompanySuppressionRule, nextDate: string) => {
+    if (!nextDate || nextDate === rule.eventDate) return;
+    try {
+      await api.updateParentCompanySuppression(rule.id, { eventDate: nextDate });
+      await loadRules();
+      onSuppressionChanged();
+      onNotify('success', `Updated date for ${rule.companyName}`);
+    } catch (err) {
+      onNotify('error', err instanceof Error ? err.message : 'Update failed');
+    }
+  };
+
+  const handleDeleteCompany = async (rule: ParentCompanySuppressionRule) => {
+    try {
+      await api.deleteParentCompanySuppression(rule.id);
+      await loadRules();
+      onSuppressionChanged();
+      onNotify('success', `Removed ${rule.companyName} from parent company suppression`);
+    } catch (err) {
+      onNotify('error', err instanceof Error ? err.message : 'Delete failed');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
@@ -232,13 +302,188 @@ export function SuppressionPage({
             <Ban className="h-4 w-4" aria-hidden="true" />
             Opted Out (Permanent DNC)
           </button>
+          <button
+            type="button"
+            role="tab"
+            id="tab-companies"
+            aria-selected={activeTab === 'companies'}
+            onClick={() => setActiveTab('companies')}
+          >
+            <Building2 className="h-4 w-4" aria-hidden="true" />
+            Parent Companies
+          </button>
         </div>
 
         <p className="text-sm text-slate-600">
           {activeTab === 'contacted'
             ? `Sites marked as contacted are disqualified until ${cooldownDays} days after their contacted date. Once the cooldown expires, they become eligible for discovery again.`
-            : 'Sites that replied asking to opt out are permanently disqualified. They never expire and cannot be overwritten by future contacted imports.'}
+            : activeTab === 'opt_out'
+              ? 'Sites that replied asking to opt out are permanently disqualified. They never expire and cannot be overwritten by future contacted imports.'
+              : 'Suppress entire publisher networks or parent companies (e.g. Valnet, Static Media, Future plc). Any scanned site owned by a listed parent company is automatically suppressed.'}
         </p>
+
+        {activeTab === 'companies' ? (
+          <>
+            <form
+              onSubmit={handleAddCompany}
+              className="grid items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-12"
+            >
+              <div className="lg:col-span-3">
+                <label htmlFor="sup-company-name" className="block text-xs font-semibold text-slate-700">
+                  Parent Company Name
+                </label>
+                <input
+                  id="sup-company-name"
+                  type="text"
+                  required
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  placeholder="e.g. Valnet, Static Media"
+                  className="app-input mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <label htmlFor="sup-company-type" className="block text-xs font-semibold text-slate-700">
+                  Rule Type
+                </label>
+                <select
+                  id="sup-company-type"
+                  value={companyType}
+                  onChange={(e) => setCompanyType(e.target.value as SuppressionType)}
+                  className="app-input mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm"
+                >
+                  <option value="opt_out">Opt-Out (DNC)</option>
+                  <option value="contacted">Contacted ({cooldownDays}d)</option>
+                </select>
+              </div>
+              <div className="lg:col-span-2">
+                <label htmlFor="sup-company-date" className="block text-xs font-semibold text-slate-700">
+                  Date
+                </label>
+                <input
+                  id="sup-company-date"
+                  type="date"
+                  required
+                  value={companyDate}
+                  onChange={(e) => setCompanyDate(e.target.value)}
+                  className="app-input mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="lg:col-span-3">
+                <label htmlFor="sup-company-reason" className="block text-xs font-semibold text-slate-700">
+                  Notes / Reason
+                </label>
+                <input
+                  id="sup-company-reason"
+                  type="text"
+                  value={companyReason}
+                  onChange={(e) => setCompanyReason(e.target.value)}
+                  placeholder="e.g. Portfolio-wide DNC"
+                  className="app-input mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <button
+                  type="submit"
+                  className="inline-flex h-[42px] w-full items-center justify-center gap-1 rounded-lg bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800"
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  Add
+                </button>
+              </div>
+            </form>
+
+            <div className="space-y-3">
+              <search className="flex flex-wrap items-center justify-between gap-3">
+                <label htmlFor="sup-company-search" className="visually-hidden">
+                  Search suppressed parent companies
+                </label>
+                <input
+                  id="sup-company-search"
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search parent companies..."
+                  className="app-input max-w-sm flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <span className="text-xs font-medium text-slate-500">
+                  {companyRules.length} parent company rule(s)
+                </span>
+              </search>
+
+              {loading ? (
+                <p className="py-6 text-center text-sm text-slate-500">Loading parent company rules...</p>
+              ) : companyRules.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+                  No parent company suppression rules yet.
+                </p>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2.5">Parent Company</th>
+                        <th className="px-3 py-2.5">Rule Date</th>
+                        <th className="px-3 py-2.5">Status</th>
+                        <th className="px-3 py-2.5">Reason / Notes</th>
+                        <th className="px-3 py-2.5 text-right">Remove</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {companyRules.map((rule) => (
+                        <tr key={rule.id}>
+                          <td className="px-3 py-2.5 font-semibold text-slate-900 whitespace-nowrap">
+                            {rule.companyName}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="date"
+                              defaultValue={rule.eventDate}
+                              onBlur={(e) => handleUpdateCompanyDate(rule, e.target.value)}
+                              aria-label={`Event date for ${rule.companyName}`}
+                              className="app-input rounded border border-slate-300 px-2 py-1 text-xs"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 whitespace-nowrap">
+                            {rule.liveState === 'permanent' ? (
+                              <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-semibold text-rose-800">
+                                <Ban className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                Permanent DNC
+                              </span>
+                            ) : rule.liveState === 'active_cooldown' ? (
+                              <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800">
+                                <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                Cooldown ({rule.daysRemaining}d left · {rule.expiresAt})
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center whitespace-nowrap rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
+                                Cooldown Expired (Eligible)
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs text-slate-600">
+                            {rule.reason || '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCompany(rule)}
+                              className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                              aria-label={`Delete rule for ${rule.companyName}`}
+                            >
+                              <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
 
         {/* Quick Single Add */}
         <form
@@ -510,6 +755,8 @@ export function SuppressionPage({
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
     </div>
   );

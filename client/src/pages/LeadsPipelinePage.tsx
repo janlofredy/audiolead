@@ -32,6 +32,7 @@ interface LeadsPipelinePageProps {
   kpis: PipelineKpis;
   activeScan: ScanProgressEvent | null;
   onStartPendingScan: () => void;
+  onRetryFailedScan: () => void;
   onRescanLead: (leadId: string) => void;
   onInspectLead: (leadId: string) => void;
   onRefresh: () => Promise<void>;
@@ -45,6 +46,7 @@ export function LeadsPipelinePage({
   kpis,
   activeScan,
   onStartPendingScan,
+  onRetryFailedScan,
   onRescanLead,
   onInspectLead,
   onRefresh,
@@ -62,6 +64,17 @@ export function LeadsPipelinePage({
   const [editingVisitsId, setEditingVisitsId] = useState<string | null>(null);
   const [editingVisitsValue, setEditingVisitsValue] = useState('');
   const [copiedLeadId, setCopiedLeadId] = useState<string | null>(null);
+
+  const retryableFailedCount = useMemo(
+    () =>
+      leads.filter(
+        (l) =>
+          l.verdict === 'error' &&
+          !l.blockedByBotProtection &&
+          /timed out|429|502|503|504|econnreset|etimedout|fetch failed/i.test(l.lastError ?? ''),
+      ).length,
+    [leads],
+  );
 
   const handleSort = (key: SortKey, label: string) => {
     const nextDir: 'ascending' | 'descending' =
@@ -313,6 +326,16 @@ export function LeadsPipelinePage({
             >
               <Play className="h-4 w-4" aria-hidden="true" />
               Scan Pending ({kpis.pending})
+            </button>
+          )}
+          {retryableFailedCount > 0 && (
+            <button
+              type="button"
+              onClick={onRetryFailedScan}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100"
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              Retry Timed-Out / Rate-Limited ({retryableFailedCount})
             </button>
           )}
           <button

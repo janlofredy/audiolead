@@ -106,6 +106,7 @@ export function DiscoverPage({
   // Auto-mined suggestions state
   const [suggestions, setSuggestions] = useState<DiscoverySuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [bulkSuggestionLimit, setBulkSuggestionLimit] = useState<number | 'all'>(25);
 
   const [queueing, setQueueing] = useState(false);
 
@@ -306,7 +307,7 @@ export function DiscoverPage({
   const handleBulkQueueSuggestions = async () => {
     setQueueing(true);
     try {
-      const res = await api.bulkQueueSuggestions();
+      const res = await api.bulkQueueSuggestions({ limit: bulkSuggestionLimit });
       await loadSuggestions();
       onSuggestionsChanged();
       onQueuedAndScan(res.jobId, res.addedCount);
@@ -828,22 +829,40 @@ export function DiscoverPage({
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                Auto-Mined Publisher Suggestions
+                Auto-Mined High-Traffic Suggestions
               </h2>
               <p className="text-xs text-slate-500">
-                Independent websites discovered passively from outbound links inside articles you already scanned.
+                Independent websites discovered passively from outbound links inside scanned articles, filtered to sites meeting your minimum traffic threshold via Tranco rank.
               </p>
             </div>
             {suggestions.length > 0 && (
-              <button
-                type="button"
-                disabled={queueing}
-                onClick={handleBulkQueueSuggestions}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
-              >
-                <Play className="h-4 w-4" aria-hidden="true" />
-                Queue Top 10 &amp; Scan
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  aria-label="Bulk queue batch size"
+                  value={String(bulkSuggestionLimit)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setBulkSuggestionLimit(val === 'all' ? 'all' : Number(val));
+                  }}
+                  className="app-input rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-700"
+                >
+                  <option value="25">Top 25</option>
+                  <option value="50">Top 50</option>
+                  <option value="100">Top 100</option>
+                  <option value="all">All ({suggestions.length})</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={queueing}
+                  onClick={handleBulkQueueSuggestions}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  <Play className="h-4 w-4" aria-hidden="true" />
+                  {bulkSuggestionLimit === 'all'
+                    ? `Queue All (${suggestions.length}) & Scan`
+                    : `Queue Top ${Math.min(bulkSuggestionLimit, suggestions.length)} & Scan`}
+                </button>
+              </div>
             )}
           </div>
 
@@ -858,8 +877,13 @@ export function DiscoverPage({
               {suggestions.map((s) => (
                 <li key={s.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                   <div className="min-w-0 space-y-0.5">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-slate-900">{s.domain}</span>
+                      {s.estimatedVisits !== null && (
+                        <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                          ~{formatVisits(s.estimatedVisits)}/mo
+                        </span>
+                      )}
                       {s.sourceDomain && (
                         <span className="text-xs text-slate-500">
                           linked from {s.sourceDomain}

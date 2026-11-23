@@ -5,6 +5,7 @@ import type {
   LeadStatus,
   LeadWithContacts,
   MaskedAppSettings,
+  ParentCompanySuppressionRule,
   PipelineKpis,
   ScanJobSummary,
   ScanProgressEvent,
@@ -100,14 +101,21 @@ export const api = {
     });
   },
 
-  bulkQueueSuggestions(ids?: string[]): Promise<{
+  bulkQueueSuggestions(options?: {
+    ids?: string[];
+    limit?: number | 'all';
+  }): Promise<{
     addedCount: number;
     jobId: string | null;
   }> {
     return requestJson('/api/discovery/suggestions/bulk-queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids, autoScan: true }),
+      body: JSON.stringify({
+        ids: options?.ids,
+        limit: options?.limit,
+        autoScan: true,
+      }),
     });
   },
 
@@ -137,6 +145,7 @@ export const api = {
     id: string,
     patch: {
       monthlyVisits?: number | string | null;
+      parentCompany?: string | null;
       status?: LeadStatus;
       notes?: string | null;
     },
@@ -224,6 +233,7 @@ export const api = {
   startScan(payload: {
     leadIds?: string[];
     scanPending?: boolean;
+    retryFailed?: boolean;
     forceRescan?: boolean;
   }): Promise<ScanJobSummary> {
     return requestJson('/api/scans/start', {
@@ -340,6 +350,47 @@ export const api = {
 
   deleteSuppressionRule(id: string): Promise<{ ok: boolean }> {
     return requestJson(`/api/suppression/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  getParentCompanySuppressions(params?: {
+    type?: SuppressionType | 'all';
+    q?: string;
+  }): Promise<{ rules: ParentCompanySuppressionRule[]; contactedCooldownDays: number }> {
+    const qs = new URLSearchParams();
+    if (params?.type) qs.set('type', params.type);
+    if (params?.q) qs.set('q', params.q);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return requestJson(`/api/suppression/companies${suffix}`);
+  },
+
+  addParentCompanySuppression(payload: {
+    companyName: string;
+    type: SuppressionType;
+    eventDate?: string;
+    reason?: string | null;
+  }): Promise<{ status: string; rule: ParentCompanySuppressionRule; leadsAffected: number }> {
+    return requestJson('/api/suppression/companies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateParentCompanySuppression(
+    id: string,
+    patch: { type?: SuppressionType; eventDate?: string; reason?: string | null },
+  ): Promise<{ rule: ParentCompanySuppressionRule; leadsAffected: number }> {
+    return requestJson(`/api/suppression/companies/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  },
+
+  deleteParentCompanySuppression(id: string): Promise<{ ok: boolean; leadsAffected: number }> {
+    return requestJson(`/api/suppression/companies/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
   },

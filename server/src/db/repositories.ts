@@ -9,6 +9,7 @@ import type {
   LeadWithContacts,
   LlmProvider,
   MaskedAppSettings,
+  ParentCompanySuppressionRule,
   PipelineKpis,
   QualificationVerdict,
   SuppressionCheckResult,
@@ -22,6 +23,10 @@ import {
   daysBetweenIsoDates,
   todayIsoDate,
 } from '../services/scanner/domainUtils.js';
+import {
+  doesCompanyMatchRule,
+  normalizeCompanyName,
+} from '../services/scanner/parentCompanyDetector.js';
 
 function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
   if (!json) return fallback;
@@ -276,6 +281,56 @@ interface RawSuppressionRow {
   updated_at: string;
 }
 
+export interface RawParentCompanySuppressionRow {
+  id: string;
+  company_name: string;
+  normalized_name: string;
+  type: SuppressionType;
+  event_date: string;
+  reason: string | null;
+  source: 'import' | 'manual' | 'pipeline';
+  created_at: string;
+  updated_at: string;
+}
+
+const SUPPRESSION_PRIORITY: Record<SuppressionCheckResult['status'], number> = {
+  clear: 0,
+  cooldown_expired: 1,
+  cooldown: 2,
+  opted_out: 3,
+};
+
+export function evaluateDomainAndCompany(
+  domainRow: { type: SuppressionType; event_date: string; reason: string | null } | undefined,
+  parentCompany: string | null | undefined,
+  companyRows: RawParentCompanySuppressionRow[],
+  cooldownDays: number,
+  today = todayIsoDate(),
+): SuppressionCheckResult {
+  let best = evaluateSuppressionRule(domainRow, cooldownDays, today);
+  if (!parentCompany || companyRows.length === 0) {
+    return best;
+  }
+
+  for (const companyRule of companyRows) {
+    if (!doesCompanyMatchRule(parentCompany, companyRule.normalized_name)) {
+      continue;
+    }
+    const candidate = evaluateSuppressionRule(companyRule, cooldownDays, today);
+    if (SUPPRESSION_PRIORITY[candidate.status] > SUPPRESSION_PRIORITY[best.status]) {
+      best = {
+        ...candidate,
+        matchedParentCompany: companyRule.company_name,
+        reason: candidate.reason
+          ? `${candidate.reason} (Parent company: ${companyRule.company_name})`
+          : `Parent company: ${companyRule.company_name}`,
+      };
+    }
+  }
+
+  return best;
+}
+
 export class SuppressionRepo {
   constructor(private db: AppDatabase) {}
 
@@ -460,6 +515,188 @@ export class SuppressionRepo {
     this.db.prepare('DELETE FROM suppression_rules WHERE id = ?').run(id);
     return { deletedDomain: existing.domain };
   }
+
+  private toParentCompanyRule(
+    row: RawParentCompanySuppressionRow,
+    cooldownDays: number,
+    today = todayIsoDate(),
+  ): ParentCompanySuppressionRule {
+    const evaluated = evaluateSuppressionRule(row, cooldownDays, today);
+    let liveState: SuppressionRule['liveState'] = 'permanent';
+    if (row.type === 'contacted') {
+      liveState = evaluated.status === 'cooldown' ? 'active_cooldown' : 'expired';
+    }
+    return {
+      id: row.id,
+      companyName: row.company_name,
+      normalizedName: row.normalized_name,
+      type: row.type,
+      eventDate: row.event_date,
+      reason: row.reason,
+      source: row.source,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      liveState,
+      expiresAt: evaluated.expiresAt,
+      daysRemaining: evaluated.daysRemaining,
+    };
+  }
+
+  getAllParentCompanyRows(): RawParentCompanySuppressionRow[] {
+    return this.db
+      .prepare('SELECT * FROM parent_company_suppression_rules ORDER BY event_date DESC, updated_at DESC')
+      .all() as RawParentCompanySuppressionRow[];
+  }
+
+  listParentCompanies(
+    cooldownDays: number,
+    filters?: { type?: SuppressionType | 'all'; q?: string },
+  ): ParentCompanySuppressionRule[] {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (filters?.type && filters.type !== 'all') {
+      clauses.push('type = ?');
+      params.push(filters.type);
+    }
+    if (filters?.q?.trim()) {
+      clauses.push('(LOWER(company_name) LIKE ? OR normalized_name LIKE ? OR LOWER(COALESCE(reason, \'\')) LIKE ?)');
+      const pat = `%${filters.q.trim().toLowerCase()}%`;
+      params.push(pat, pat, pat);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(`SELECT * FROM parent_company_suppression_rules ${where} ORDER BY event_date DESC, updated_at DESC`)
+      .all(...params) as RawParentCompanySuppressionRow[];
+    const today = todayIsoDate();
+    return rows.map((r) => this.toParentCompanyRule(r, cooldownDays, today));
+  }
+
+  getParentCompanyById(id: string, cooldownDays: number): ParentCompanySuppressionRule | null {
+    const row = this.db
+      .prepare('SELECT * FROM parent_company_suppression_rules WHERE id = ?')
+      .get(id) as RawParentCompanySuppressionRow | undefined;
+    return row ? this.toParentCompanyRule(row, cooldownDays) : null;
+  }
+
+  checkDomainAndCompany(
+    domain: string,
+    parentCompany: string | null | undefined,
+    cooldownDays: number,
+  ): SuppressionCheckResult {
+    const row = this.db
+      .prepare('SELECT type, event_date, reason FROM suppression_rules WHERE domain = ?')
+      .get(domain.toLowerCase()) as
+      | { type: SuppressionType; event_date: string; reason: string | null }
+      | undefined;
+    const companyRows = parentCompany ? this.getAllParentCompanyRows() : [];
+    return evaluateDomainAndCompany(row, parentCompany, companyRows, cooldownDays);
+  }
+
+  upsertParentCompanyRule(input: {
+    companyName: string;
+    type: SuppressionType;
+    eventDate: string;
+    reason?: string | null;
+    source?: 'import' | 'manual' | 'pipeline';
+  }): { status: 'inserted' | 'updated' | 'protected_opt_out' | 'skipped_older'; id: string } {
+    const trimmedName = input.companyName.trim();
+    const normalizedName = normalizeCompanyName(trimmedName);
+    const existing = this.db
+      .prepare('SELECT * FROM parent_company_suppression_rules WHERE normalized_name = ?')
+      .get(normalizedName) as RawParentCompanySuppressionRow | undefined;
+
+    if (!existing) {
+      const id = nanoid();
+      this.db
+        .prepare(
+          `INSERT INTO parent_company_suppression_rules
+           (id, company_name, normalized_name, type, event_date, reason, source, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        )
+        .run(
+          id,
+          trimmedName,
+          normalizedName,
+          input.type,
+          input.eventDate,
+          input.reason ?? null,
+          input.source ?? 'manual',
+        );
+      return { status: 'inserted', id };
+    }
+
+    if (existing.type === 'opt_out' && input.type === 'contacted') {
+      return { status: 'protected_opt_out', id: existing.id };
+    }
+
+    if (existing.type === 'contacted' && input.type === 'contacted') {
+      if (input.eventDate < existing.event_date) {
+        return { status: 'skipped_older', id: existing.id };
+      }
+      if (input.eventDate === existing.event_date && !input.reason) {
+        return { status: 'skipped_older', id: existing.id };
+      }
+    }
+
+    const nextReason =
+      input.reason !== undefined && input.reason !== null && input.reason !== ''
+        ? input.reason
+        : existing.reason;
+
+    this.db
+      .prepare(
+        `UPDATE parent_company_suppression_rules
+         SET company_name = ?, type = ?, event_date = ?, reason = ?, source = ?, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .run(
+        trimmedName || existing.company_name,
+        input.type,
+        input.eventDate,
+        nextReason,
+        input.source ?? existing.source,
+        existing.id,
+      );
+
+    return { status: 'updated', id: existing.id };
+  }
+
+  updateParentCompanyById(
+    id: string,
+    patch: { type?: SuppressionType; eventDate?: string; reason?: string | null },
+    cooldownDays: number,
+  ): ParentCompanySuppressionRule | null {
+    const existing = this.db
+      .prepare('SELECT * FROM parent_company_suppression_rules WHERE id = ?')
+      .get(id) as RawParentCompanySuppressionRow | undefined;
+    if (!existing) return null;
+
+    this.db
+      .prepare(
+        `UPDATE parent_company_suppression_rules
+         SET type = ?, event_date = ?, reason = ?, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .run(
+        patch.type ?? existing.type,
+        patch.eventDate ?? existing.event_date,
+        patch.reason !== undefined ? patch.reason : existing.reason,
+        id,
+      );
+
+    return this.getParentCompanyById(id, cooldownDays);
+  }
+
+  deleteParentCompanyById(id: string): { deletedCompany: string | null } {
+    const existing = this.db
+      .prepare('SELECT company_name FROM parent_company_suppression_rules WHERE id = ?')
+      .get(id) as { company_name: string } | undefined;
+    if (!existing) return { deletedCompany: null };
+    this.db.prepare('DELETE FROM parent_company_suppression_rules WHERE id = ?').run(id);
+    return { deletedCompany: existing.company_name };
+  }
 }
 
 interface RawContactRow {
@@ -485,6 +722,7 @@ interface RawLeadRow {
   url: string;
   site_title: string | null;
   description: string | null;
+  parent_company: string | null;
   discovery_source: string;
   status: LeadStatus;
   verdict: QualificationVerdict;
@@ -786,13 +1024,20 @@ export class LeadsRepo {
   private mapLeadRow(
     row: RawLeadRow,
     suppressionMap: Map<string, RawSuppressionRow>,
+    companyRows: RawParentCompanySuppressionRow[],
     cooldownDays: number,
     today: string,
     primaryContact: Contact | null,
     contactCount: number,
   ): Lead {
     const supRow = suppressionMap.get(row.domain);
-    const suppression = evaluateSuppressionRule(supRow, cooldownDays, today);
+    const suppression = evaluateDomainAndCompany(
+      supRow,
+      row.parent_company,
+      companyRows,
+      cooldownDays,
+      today,
+    );
 
     return {
       id: row.id,
@@ -800,6 +1045,7 @@ export class LeadsRepo {
       url: row.url,
       siteTitle: row.site_title,
       description: row.description,
+      parentCompany: row.parent_company ?? null,
       discoverySource: row.discovery_source,
       status: row.status,
       verdict: row.verdict,
@@ -869,6 +1115,7 @@ export class LeadsRepo {
 
     const domains = allRows.map((r) => r.domain);
     const suppressionMap = this.suppressionRepo.getRawMapByDomains(domains);
+    const companyRows = this.suppressionRepo.getAllParentCompanyRows();
     const today = todayIsoDate();
 
     const contactsRows = this.db
@@ -894,6 +1141,7 @@ export class LeadsRepo {
       this.mapLeadRow(
         r,
         suppressionMap,
+        companyRows,
         cooldownDays,
         today,
         primaryByLead.get(r.id) ?? null,
@@ -982,9 +1230,11 @@ export class LeadsRepo {
 
     const contacts = this.contactsRepo.listByLeadId(id);
     const suppressionMap = this.suppressionRepo.getRawMapByDomains([row.domain]);
+    const companyRows = row.parent_company ? this.suppressionRepo.getAllParentCompanyRows() : [];
     const lead = this.mapLeadRow(
       row,
       suppressionMap,
+      companyRows,
       cooldownDays,
       todayIsoDate(),
       contacts[0] ?? null,
@@ -1064,6 +1314,7 @@ export class LeadsRepo {
       url: string;
       siteTitle: string | null;
       description: string | null;
+      parentCompany?: string | null;
       status: LeadStatus;
       verdict: QualificationVerdict;
       qualificationScore: number;
@@ -1098,6 +1349,7 @@ export class LeadsRepo {
           url = ?,
           site_title = COALESCE(?, site_title),
           description = COALESCE(?, description),
+          parent_company = COALESCE(?, parent_company),
           status = ?,
           verdict = ?,
           qualification_score = ?,
@@ -1132,6 +1384,7 @@ export class LeadsRepo {
         data.url,
         data.siteTitle,
         data.description,
+        data.parentCompany ?? null,
         data.status,
         data.verdict,
         data.qualificationScore,
@@ -1167,6 +1420,7 @@ export class LeadsRepo {
     patch: {
       monthlyVisits?: number | null;
       visitsSource?: Lead['visitsSource'];
+      parentCompany?: string | null;
       status?: LeadStatus;
       verdict?: QualificationVerdict;
       qualificationScore?: number;
@@ -1184,6 +1438,10 @@ export class LeadsRepo {
     if (patch.visitsSource !== undefined) {
       sets.push('visits_source = ?');
       params.push(patch.visitsSource);
+    }
+    if (patch.parentCompany !== undefined) {
+      sets.push('parent_company = ?');
+      params.push(patch.parentCompany);
     }
     if (patch.status !== undefined) {
       sets.push('status = ?');
@@ -1256,6 +1514,29 @@ export class LeadsRepo {
       .all(limit) as Array<{ id: string }>;
     return rows.map((r) => r.id);
   }
+
+  getRetryableFailedLeadIds(limit = 250): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM leads
+         WHERE verdict = 'error'
+           AND blocked_by_bot_protection = 0
+           AND (
+             LOWER(COALESCE(last_error, '')) LIKE '%timed out%'
+             OR LOWER(COALESCE(last_error, '')) LIKE '%429%'
+             OR LOWER(COALESCE(last_error, '')) LIKE '%502%'
+             OR LOWER(COALESCE(last_error, '')) LIKE '%503%'
+             OR LOWER(COALESCE(last_error, '')) LIKE '%504%'
+             OR LOWER(COALESCE(last_error, '')) LIKE '%econnreset%'
+             OR LOWER(COALESCE(last_error, '')) LIKE '%etimedout%'
+             OR LOWER(COALESCE(last_error, '')) LIKE '%fetch failed%'
+           )
+         ORDER BY updated_at ASC
+         LIMIT ?`,
+      )
+      .all(limit) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
 }
 
 interface RawSuggestionRow {
@@ -1286,8 +1567,8 @@ export class SuggestionsRepo {
         `SELECT s.* FROM discovery_suggestions s
          LEFT JOIN leads l ON l.domain = s.domain
          WHERE s.status = ? AND l.id IS NULL
-         ORDER BY s.created_at DESC
-         LIMIT 200`,
+         ORDER BY COALESCE(s.estimated_visits, 0) DESC, s.created_at DESC
+         LIMIT 500`,
       )
       .all(status) as RawSuggestionRow[];
 

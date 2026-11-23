@@ -12,16 +12,26 @@ export function createScansRoutes(db: AppDatabase, orchestrator: ScanOrchestrato
     const body = (await c.req.json().catch(() => ({}))) as {
       leadIds?: string[];
       scanPending?: boolean;
+      retryFailed?: boolean;
       forceRescan?: boolean;
+      limit?: number;
     };
 
     const leadsRepo = new LeadsRepo(db);
     let ids = body.leadIds ?? [];
-    if (body.scanPending || ids.length === 0) {
-      ids = leadsRepo.getPendingLeadIds(100);
+    let forceRescan = Boolean(body.forceRescan);
+    const limit = body.limit
+      ? Math.min(500, Math.max(1, Math.floor(Number(body.limit)) || 250))
+      : 250;
+
+    if (body.retryFailed) {
+      ids = leadsRepo.getRetryableFailedLeadIds(limit);
+      forceRescan = true;
+    } else if (body.scanPending || ids.length === 0) {
+      ids = leadsRepo.getPendingLeadIds(limit);
     }
 
-    const summary = orchestrator.startJob(ids, { forceRescan: body.forceRescan });
+    const summary = orchestrator.startJob(ids, { forceRescan });
     return c.json(summary);
   });
 

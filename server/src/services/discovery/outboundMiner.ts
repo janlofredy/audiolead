@@ -1,9 +1,13 @@
 import type { AppDatabase } from '../../db/index.js';
 import { SuggestionsRepo } from '../../db/repositories.js';
 import { normalizeDomain } from '../scanner/domainUtils.js';
+import {
+  estimateMonthlyVisitsFromTrancoRank,
+  lookupTrancoRank,
+} from '../scanner/trafficChecker.js';
 import { isBlockedCandidateDomain } from './blocklists.js';
 
-export function mineOutboundSuggestions(
+export async function mineOutboundSuggestions(
   db: AppDatabase,
   input: {
     sourceLeadId: string;
@@ -11,8 +15,9 @@ export function mineOutboundSuggestions(
     outboundLinks: string[];
     excludeMegaPublishers: boolean;
     cooldownDays: number;
+    minMonthlyVisits: number;
   },
-): number {
+): Promise<number> {
   const candidates = new Map<string, string>();
   const skipLinkHint = /\.(pdf|jpg|jpeg|png|gif|svg|webp|mp3|mp4|xml|zip)$/i;
 
@@ -29,11 +34,41 @@ export function mineOutboundSuggestions(
 
   if (candidates.size === 0) return 0;
 
+  const entries = Array.from(candidates.entries());
+  const qualified: Array<{
+    domain: string;
+    sampleUrl: string;
+    estimatedVisits: number | null;
+  }> = [];
+
+  for (let i = 0; i < entries.length; i += 4) {
+    const batch = entries.slice(i, i + 4);
+    const resolved = await Promise.all(
+      batch.map(async ([domain, sampleUrl]) => {
+        const rank = await lookupTrancoRank(db, domain);
+        const estimatedVisits = estimateMonthlyVisitsFromTrancoRank(rank);
+        return { domain, sampleUrl, estimatedVisits };
+      }),
+    );
+    for (const item of resolved) {
+      if (
+        input.minMonthlyVisits > 0 &&
+        (item.estimatedVisits === null || item.estimatedVisits < input.minMonthlyVisits)
+      ) {
+        continue;
+      }
+      qualified.push(item);
+    }
+  }
+
+  if (qualified.length === 0) return 0;
+
   const repo = new SuggestionsRepo(db);
   return repo.addMany(
-    Array.from(candidates.entries()).map(([domain, sampleUrl]) => ({
-      domain,
-      sampleUrl,
+    qualified.map((item) => ({
+      domain: item.domain,
+      sampleUrl: item.sampleUrl,
+      estimatedVisits: item.estimatedVisits,
       sourceType: 'outbound_mine',
       sourceLeadId: input.sourceLeadId,
       sourceDomain: input.sourceDomain,

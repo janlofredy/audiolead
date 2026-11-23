@@ -63,12 +63,27 @@ function runMigrations(db: AppDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_suppression_type ON suppression_rules(type);
     CREATE INDEX IF NOT EXISTS idx_suppression_domain ON suppression_rules(domain);
 
+    CREATE TABLE IF NOT EXISTS parent_company_suppression_rules (
+      id TEXT PRIMARY KEY,
+      company_name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL UNIQUE,
+      type TEXT NOT NULL CHECK (type IN ('contacted', 'opt_out')),
+      event_date TEXT NOT NULL,
+      reason TEXT,
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_parent_company_sup_norm ON parent_company_suppression_rules(normalized_name);
+
     CREATE TABLE IF NOT EXISTS leads (
       id TEXT PRIMARY KEY,
       domain TEXT NOT NULL UNIQUE,
       url TEXT NOT NULL,
       site_title TEXT,
       description TEXT,
+      parent_company TEXT,
       discovery_source TEXT NOT NULL DEFAULT 'manual',
       status TEXT NOT NULL DEFAULT 'pending',
       verdict TEXT NOT NULL DEFAULT 'pending',
@@ -154,4 +169,9 @@ function runMigrations(db: AppDatabase): void {
       fetched_at TEXT NOT NULL
     );
   `);
+
+  const leadCols = db.prepare('PRAGMA table_info(leads)').all() as Array<{ name: string }>;
+  if (!leadCols.some((c) => c.name === 'parent_company')) {
+    db.exec('ALTER TABLE leads ADD COLUMN parent_company TEXT;');
+  }
 }

@@ -19,6 +19,7 @@ import {
   parseFlexibleDate,
   todayIsoDate,
 } from '../services/scanner/domainUtils.js';
+import { normalizeCompanyName } from '../services/scanner/parentCompanyDetector.js';
 
 const commitSchema = z.object({
   type: z.enum(['contacted', 'opt_out']),
@@ -35,6 +36,13 @@ const commitSchema = z.object({
 
 const singleSchema = z.object({
   domain: z.string().min(1),
+  type: z.enum(['contacted', 'opt_out']),
+  eventDate: z.string().optional(),
+  reason: z.string().nullable().optional(),
+});
+
+const companySchema = z.object({
+  companyName: z.string().min(2),
   type: z.enum(['contacted', 'opt_out']),
   eventDate: z.string().optional(),
   reason: z.string().nullable().optional(),
@@ -176,6 +184,89 @@ export function createSuppressionRoutes(db: AppDatabase): Hono {
 
     const rule = new SuppressionRepo(db).getById(res.id, settings.contactedCooldownDays);
     return c.json({ status: res.status, rule });
+  });
+
+  app.get('/companies', (c) => {
+    const type = (c.req.query('type') || 'all') as 'contacted' | 'opt_out' | 'all';
+    const q = c.req.query('q') || '';
+    const settings = new SettingsRepo(db).get();
+    const rules = new SuppressionRepo(db).listParentCompanies(settings.contactedCooldownDays, {
+      type,
+      q,
+    });
+
+    return c.json({
+      rules,
+      contactedCooldownDays: settings.contactedCooldownDays,
+    });
+  });
+
+  app.post('/companies', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = companySchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'Please provide a valid parent company name.' }, 400);
+    }
+
+    const normalized = normalizeCompanyName(parsed.data.companyName);
+    if (!normalized || normalized.length < 2) {
+      return c.json({ error: 'Could not recognize a valid company name.' }, 400);
+    }
+
+    const settings = new SettingsRepo(db).get();
+    const eventDate = parseFlexibleDate(parsed.data.eventDate) ?? todayIsoDate();
+    const res = new SuppressionRepo(db).upsertParentCompanyRule({
+      companyName: parsed.data.companyName.trim(),
+      type: parsed.data.type,
+      eventDate,
+      reason: parsed.data.reason ?? null,
+      source: 'manual',
+    });
+
+    const leadsAffected = reconcileLeadsWithSuppression(db);
+    const rule = new SuppressionRepo(db).getParentCompanyById(
+      res.id,
+      settings.contactedCooldownDays,
+    );
+    return c.json({ status: res.status, rule, leadsAffected });
+  });
+
+  app.patch('/companies/:id', async (c) => {
+    const id = c.req.param('id');
+    const body = (await c.req.json().catch(() => null)) as {
+      type?: 'contacted' | 'opt_out';
+      eventDate?: string;
+      reason?: string | null;
+    } | null;
+    if (!body) return c.json({ error: 'Invalid request body' }, 400);
+
+    const settings = new SettingsRepo(db).get();
+    const parsedDate = body.eventDate ? parseFlexibleDate(body.eventDate) : undefined;
+    if (body.eventDate && !parsedDate) {
+      return c.json({ error: 'Invalid date format (use YYYY-MM-DD).' }, 400);
+    }
+
+    const updated = new SuppressionRepo(db).updateParentCompanyById(
+      id,
+      {
+        type: body.type,
+        eventDate: parsedDate ?? undefined,
+        reason: body.reason,
+      },
+      settings.contactedCooldownDays,
+    );
+
+    if (!updated) return c.json({ error: 'Parent company rule not found' }, 404);
+    const leadsAffected = reconcileLeadsWithSuppression(db);
+    return c.json({ rule: updated, leadsAffected });
+  });
+
+  app.delete('/companies/:id', (c) => {
+    const id = c.req.param('id');
+    const { deletedCompany } = new SuppressionRepo(db).deleteParentCompanyById(id);
+    if (!deletedCompany) return c.json({ error: 'Parent company rule not found' }, 404);
+    const leadsAffected = reconcileLeadsWithSuppression(db);
+    return c.json({ ok: true, deletedCompany, leadsAffected });
   });
 
   app.patch('/:id', async (c) => {

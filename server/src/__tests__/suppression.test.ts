@@ -143,4 +143,78 @@ describe('suppression & cooldown rules', () => {
     expect(xlsxRows[0].rawDomain).toBe('xlsxsite.net');
     expect(xlsxRows[0].rawReason).toBe('Unsubscribed');
   });
+
+  it('suppresses leads matching a parent company rule and reconciles on removal', () => {
+    const db = createDatabase(':memory:');
+    const leadsRepo = new LeadsRepo(db);
+    const supRepo = new SuppressionRepo(db);
+
+    const { createdIds } = leadsRepo.createPending([
+      { domain: 'sister-site.com', monthlyVisits: 150_000, discoverySource: 'Niche' },
+    ]);
+    const leadId = createdIds[0];
+    leadsRepo.updateScanResult(leadId, {
+      url: 'https://sister-site.com',
+      siteTitle: 'Sister Site',
+      description: null,
+      parentCompany: 'Static Media, Inc.',
+      status: 'qualified',
+      verdict: 'qualified',
+      qualificationScore: 100,
+      qualificationSummary: 'Qualified',
+      monthlyVisits: 150_000,
+      visitsSource: 'manual',
+      trancoRank: 150_000,
+      hasArticles: true,
+      articleCountFound: 10,
+      latestArticleDate: todayIsoDate(),
+      avgArticleWords: 800,
+      sampleArticleUrls: [],
+      rssFeedUrl: null,
+      sitemapUrl: null,
+      hasAds: true,
+      hasAdsTxt: true,
+      adsTxtEntries: 5,
+      adNetworksDetected: ['Mediavine'],
+      hasAudioPlayer: false,
+      audioProvidersDetected: [],
+      audioEvidence: null,
+      detectedLanguage: 'en',
+      detectedCountry: 'US',
+      keywords: [],
+      blockedByBotProtection: false,
+      lastError: null,
+    });
+
+    const added = supRepo.upsertParentCompanyRule({
+      companyName: 'Static Media',
+      type: 'opt_out',
+      eventDate: todayIsoDate(),
+      reason: 'Portfolio DNC',
+    });
+    expect(added.status).toBe('inserted');
+
+    // Opt-out cannot be downgraded to contacted
+    const downgrade = supRepo.upsertParentCompanyRule({
+      companyName: 'Static Media LLC',
+      type: 'contacted',
+      eventDate: todayIsoDate(),
+    });
+    expect(downgrade.status).toBe('protected_opt_out');
+
+    reconcileLeadsWithSuppression(db);
+    const suppressed = leadsRepo.getById(leadId, 90)!;
+    expect(suppressed.status).toBe('opted_out');
+    expect(suppressed.verdict).toBe('disqualified');
+    expect(suppressed.suppression.status).toBe('opted_out');
+    expect(suppressed.suppression.matchedParentCompany).toBe('Static Media');
+
+    // Removing the parent company rule restores the lead on reconcile
+    supRepo.deleteParentCompanyById(added.id);
+    reconcileLeadsWithSuppression(db);
+    const restored = leadsRepo.getById(leadId, 90)!;
+    expect(restored.suppression.status).toBe('clear');
+    expect(restored.verdict).toBe('qualified');
+    expect(restored.status).toBe('qualified');
+  });
 });

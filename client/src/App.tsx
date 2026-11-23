@@ -113,6 +113,20 @@ export function App() {
     }
   };
 
+  const handleRetryFailedScan = async () => {
+    try {
+      const summary = await api.startScan({ retryFailed: true });
+      if (summary.total === 0) {
+        notify('error', 'No timed-out or rate-limited sites to retry.');
+        return;
+      }
+      attachScanJob(summary.jobId);
+      notify('success', `Retrying ${summary.total} timed-out / rate-limited site(s)...`);
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Failed to retry failed scans');
+    }
+  };
+
   const handleRescanLead = async (leadId: string) => {
     try {
       const summary = await api.startScan({ leadIds: [leadId], forceRescan: true });
@@ -208,6 +222,7 @@ export function App() {
             kpis={kpis}
             activeScan={activeScan}
             onStartPendingScan={handleStartPendingScan}
+            onRetryFailedScan={handleRetryFailedScan}
             onRescanLead={handleRescanLead}
             onInspectLead={(id) => setInspectLeadId(id)}
             onRefresh={refreshPipeline}

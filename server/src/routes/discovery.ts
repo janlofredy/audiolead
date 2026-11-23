@@ -241,6 +241,7 @@ export function createDiscoveryRoutes(db: AppDatabase, orchestrator: ScanOrchest
   app.post('/suggestions/bulk-queue', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       ids?: string[];
+      limit?: number | 'all';
       autoScan?: boolean;
     };
     const settings = new SettingsRepo(db).get();
@@ -248,7 +249,9 @@ export function createDiscoveryRoutes(db: AppDatabase, orchestrator: ScanOrchest
     const allNew = suggestionsRepo.list(settings.contactedCooldownDays, 'new');
     const selected = body.ids?.length
       ? allNew.filter((s) => body.ids!.includes(s.id))
-      : allNew.slice(0, 10);
+      : body.limit === 'all'
+        ? allNew.slice(0, 500)
+        : allNew.slice(0, Math.min(500, Math.max(1, Number(body.limit) || 25)));
 
     const { createdIds, skippedExisting } = new LeadsRepo(db).createPending(
       selected.map((s) => ({

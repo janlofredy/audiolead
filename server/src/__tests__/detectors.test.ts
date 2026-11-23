@@ -9,10 +9,16 @@ import {
 } from '../services/scanner/contactFinder.js';
 import { scoreContactAuthority } from '../services/scanner/authorityRanker.js';
 import { evaluateQualification } from '../services/scanner/qualificationEngine.js';
+import * as cheerio from 'cheerio';
 import {
   estimateMonthlyVisitsFromTrancoRank,
   resolveMonthlyVisitsWithTranco,
 } from '../services/scanner/trafficChecker.js';
+import {
+  detectParentCompany,
+  normalizeCompanyName,
+} from '../services/scanner/parentCompanyDetector.js';
+import { isRetryableFetchFailure } from '../services/scanner/safeFetch.js';
 
 const DEFAULT_SETTINGS: AppSettings = {
   minMonthlyVisits: 50000,
@@ -349,5 +355,83 @@ describe('tranco traffic estimation', () => {
       monthlyVisits: 85_000,
       visitsSource: 'discovery',
     });
+  });
+});
+
+describe('parentCompanyDetector & retryable fetch classification', () => {
+  it('normalizes company names and detects parent company from JSON-LD and footer', () => {
+    expect(normalizeCompanyName('Static Media, Inc.')).toBe('static media');
+    expect(normalizeCompanyName('Future Publishing Limited')).toBe('future publishing');
+    expect(normalizeCompanyName('Valnet LLC')).toBe('valnet');
+
+    const jsonLdHtml = `
+      <html><head>
+        <script type="application/ld+json">
+          {"@type":"NewsMediaOrganization","name":"Collider","parentOrganization":{"@type":"Organization","name":"Valnet Inc."}}
+        </script>
+      </head><body></body></html>
+    `;
+    expect(detectParentCompany(cheerio.load(jsonLdHtml), 'collider.com')).toBe('Valnet Inc');
+
+    const footerHtml = `
+      <html><body>
+        <footer>Part of Static Media · All rights reserved.</footer>
+      </body></html>
+    `;
+    expect(detectParentCompany(cheerio.load(footerHtml), 'slashfilm.com')).toBe('Static Media');
+  });
+
+  it('classifies timeouts and 429/503 as retryable, while skipping bot-protection blocks', () => {
+    expect(
+      isRetryableFetchFailure({
+        ok: false,
+        status: 429,
+        finalUrl: 'https://example.com',
+        contentType: 'text/html',
+        headers: { 'retry-after': '12' },
+        body: '',
+        blockedByBotProtection: false,
+        error: 'HTTP 429',
+      }),
+    ).toEqual({ retryable: true, delayMs: 12_000, reason: 'rate limited (HTTP 429)' });
+
+    expect(
+      isRetryableFetchFailure({
+        ok: false,
+        status: 503,
+        finalUrl: 'https://example.com',
+        contentType: 'text/html',
+        headers: {},
+        body: '',
+        blockedByBotProtection: false,
+        error: 'HTTP 503',
+      }),
+    ).toEqual({ retryable: true, delayMs: 6_000, reason: 'HTTP 503' });
+
+    expect(
+      isRetryableFetchFailure({
+        ok: false,
+        status: 0,
+        finalUrl: 'https://example.com',
+        contentType: '',
+        headers: {},
+        body: '',
+        blockedByBotProtection: false,
+        error: 'Request timed out after 10000ms',
+      }),
+    ).toEqual({ retryable: true, delayMs: 5_000, reason: 'timed out' });
+
+    expect(
+      isRetryableFetchFailure({
+        ok: false,
+        status: 403,
+        finalUrl: 'https://example.com',
+        contentType: 'text/html',
+        headers: { 'cf-mitigated': 'challenge' },
+        body: 'Just a moment...',
+        blockedByBotProtection: true,
+        error: 'Blocked by bot protection (HTTP 403)',
+      }).retryable,
+    ).toBe(false);
   });
 });

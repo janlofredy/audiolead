@@ -9,7 +9,7 @@ import {
   SettingsRepo,
   SuppressionRepo,
 } from '../../db/repositories.js';
-import { safeFetch } from './safeFetch.js';
+import { isRetryableFetchFailure, safeFetch } from './safeFetch.js';
 import { detectLanguageAndCountry } from './languageDetector.js';
 import { analyzeArticles } from './articleDetector.js';
 import { detectAudioPlayersFromHtml } from './audioDetector.js';
@@ -17,6 +17,7 @@ import { analyzeAds } from './adDetector.js';
 import { lookupTrancoRank, resolveMonthlyVisitsWithTranco } from './trafficChecker.js';
 import { crawlSiteContacts } from './contactFinder.js';
 import { evaluateQualification } from './qualificationEngine.js';
+import { detectParentCompany } from './parentCompanyDetector.js';
 import { mineOutboundSuggestions } from '../discovery/outboundMiner.js';
 
 interface ActiveJob {
@@ -92,17 +93,58 @@ export class ScanOrchestrator {
     forceRescan: boolean,
     emitEvent: (ev: ScanProgressEvent) => void,
   ): Promise<void> {
-    const queue = [...leadIds];
+    const MAX_RETRIES = 2;
+    const queue: Array<{ leadId: string; notBefore: number }> = leadIds.map((leadId) => ({
+      leadId,
+      notBefore: 0,
+    }));
+    const attempts = new Map<string, number>();
     const concurrency = Math.min(3, queue.length);
 
     const workers = Array.from({ length: concurrency }, async () => {
       while (queue.length > 0) {
-        const leadId = queue.shift();
-        if (!leadId) break;
-        await this.scanSingleLead(job, leadId, forceRescan, emitEvent);
+        const now = Date.now();
+        const readyIndex = queue.findIndex((item) => item.notBefore <= now);
+        if (readyIndex === -1) {
+          const earliest = Math.min(...queue.map((item) => item.notBefore));
+          const waitMs = Math.min(1_000, Math.max(50, earliest - now));
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+
+        const [entry] = queue.splice(readyIndex, 1);
+        if (!entry) break;
+
+        const attempt = attempts.get(entry.leadId) ?? 0;
+        const outcome = await this.scanSingleLead(
+          job,
+          entry.leadId,
+          forceRescan,
+          attempt,
+          emitEvent,
+        );
+
+        if (outcome?.requeue && attempt < MAX_RETRIES) {
+          const nextAttempt = attempt + 1;
+          attempts.set(entry.leadId, nextAttempt);
+          queue.push({
+            leadId: entry.leadId,
+            notBefore: Date.now() + outcome.delayMs * nextAttempt,
+          });
+          emitEvent({
+            jobId: job.jobId,
+            type: 'lead_progress',
+            total: job.total,
+            completed: job.completed,
+            currentDomain: outcome.domain,
+            stage: `Requeued (retry ${nextAttempt}/${MAX_RETRIES} after ${outcome.reason})`,
+          });
+          continue;
+        }
+
         job.completed++;
         const updatedLead = new LeadsRepo(this.db).getById(
-          leadId,
+          entry.leadId,
           new SettingsRepo(this.db).get().contactedCooldownDays,
         );
         emitEvent({
@@ -131,8 +173,9 @@ export class ScanOrchestrator {
     job: ActiveJob,
     leadId: string,
     forceRescan: boolean,
+    attempt: number,
     emitEvent: (ev: ScanProgressEvent) => void,
-  ): Promise<void> {
+  ): Promise<{ requeue: true; delayMs: number; reason: string; domain: string } | void> {
     const settings = new SettingsRepo(this.db).get();
     const leadsRepo = new LeadsRepo(this.db);
     const supRepo = new SuppressionRepo(this.db);
@@ -153,7 +196,11 @@ export class ScanOrchestrator {
     };
 
     // Enforce Suppression FIRST before making outbound requests
-    const sup = supRepo.checkDomain(lead.domain, settings.contactedCooldownDays);
+    const sup = supRepo.checkDomainAndCompany(
+      lead.domain,
+      lead.parentCompany,
+      settings.contactedCooldownDays,
+    );
     if (!forceRescan && (sup.status === 'opted_out' || sup.status === 'cooldown')) {
       const qual = evaluateQualification({
         settings,
@@ -182,15 +229,29 @@ export class ScanOrchestrator {
     }
 
     leadsRepo.markStatus(lead.id, 'scanning');
-    reportStage('Fetching homepage...');
+    reportStage(attempt > 0 ? `Retrying homepage (attempt ${attempt + 1})...` : 'Fetching homepage...');
 
+    const timeoutMs = attempt === 0 ? 10_000 : attempt === 1 ? 15_000 : 20_000;
     const targetUrl = lead.url || `https://${lead.domain}`;
-    let homeRes = await safeFetch(targetUrl, { timeoutMs: 10_000, maxBytes: 2_000_000 });
+    let homeRes = await safeFetch(targetUrl, { timeoutMs, maxBytes: 2_000_000 });
     if (!homeRes.ok && !homeRes.blockedByBotProtection && !targetUrl.includes('://www.')) {
       const wwwUrl = `https://www.${lead.domain}`;
-      const retry = await safeFetch(wwwUrl, { timeoutMs: 10_000, maxBytes: 2_000_000 });
+      const retry = await safeFetch(wwwUrl, { timeoutMs, maxBytes: 2_000_000 });
       if (retry.ok || retry.blockedByBotProtection) {
         homeRes = retry;
+      }
+    }
+
+    if (!homeRes.ok) {
+      const retryInfo = isRetryableFetchFailure(homeRes);
+      if (retryInfo.retryable && attempt < 2) {
+        leadsRepo.markStatus(lead.id, 'pending');
+        return {
+          requeue: true,
+          delayMs: retryInfo.delayMs,
+          reason: retryInfo.reason,
+          domain: lead.domain,
+        };
       }
     }
 
@@ -300,12 +361,19 @@ export class ScanOrchestrator {
       homeRes.headers['content-language'],
     );
 
+    const parentCompany = lead.parentCompany || detectParentCompany($home, lead.domain);
+    const effectiveSup = supRepo.checkDomainAndCompany(
+      lead.domain,
+      parentCompany,
+      settings.contactedCooldownDays,
+    );
+
     const savedContacts = contactsRepo.replaceCrawledContacts(lead.id, crawledContacts);
     const hasUsableContact = savedContacts.some((c) => Boolean(c.email));
 
     const qual = evaluateQualification({
       settings,
-      suppression: sup,
+      suppression: effectiveSup,
       blockedByBotProtection: false,
       lastError: null,
       hasArticles: articleAnalysis.hasArticles,
@@ -324,6 +392,7 @@ export class ScanOrchestrator {
       url: homeRes.finalUrl,
       siteTitle,
       description,
+      parentCompany,
       status: qual.status,
       verdict: qual.verdict,
       qualificationScore: qual.score,
@@ -353,12 +422,13 @@ export class ScanOrchestrator {
     });
 
     // Passively mine outbound independent publisher links into Suggestions
-    mineOutboundSuggestions(this.db, {
+    await mineOutboundSuggestions(this.db, {
       sourceLeadId: lead.id,
       sourceDomain: lead.domain,
       outboundLinks: articleAnalysis.outboundLinks,
       excludeMegaPublishers: settings.excludeMegaPublishers,
       cooldownDays: settings.contactedCooldownDays,
+      minMonthlyVisits: settings.minMonthlyVisits,
     });
   }
 }

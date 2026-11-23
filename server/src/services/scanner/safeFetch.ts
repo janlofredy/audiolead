@@ -272,3 +272,61 @@ export async function safeFetch(
     error: 'Too many redirects',
   };
 }
+
+function parseRetryAfterMs(headerVal: string | undefined): number {
+  if (!headerVal) return 8_000;
+  const trimmed = headerVal.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return Math.min(30_000, Math.max(3_000, Number(trimmed) * 1000));
+  }
+  const parsedDate = Date.parse(trimmed);
+  if (!Number.isNaN(parsedDate)) {
+    const diff = parsedDate - Date.now();
+    return Math.min(30_000, Math.max(3_000, diff));
+  }
+  return 8_000;
+}
+
+/**
+ * Classifies whether a failed fetch is transient (timeout or rate limit) and
+ * should be automatically requeued with a backoff delay.
+ */
+export function isRetryableFetchFailure(res: SafeFetchResult): {
+  retryable: boolean;
+  delayMs: number;
+  reason: string;
+} {
+  if (res.blockedByBotProtection) {
+    return { retryable: false, delayMs: 0, reason: '' };
+  }
+
+  if (res.status === 429) {
+    return {
+      retryable: true,
+      delayMs: parseRetryAfterMs(res.headers['retry-after']),
+      reason: 'rate limited (HTTP 429)',
+    };
+  }
+
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    return {
+      retryable: true,
+      delayMs: 6_000,
+      reason: `HTTP ${res.status}`,
+    };
+  }
+
+  if (
+    res.status === 0 &&
+    res.error &&
+    /timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|fetch failed/i.test(res.error)
+  ) {
+    return {
+      retryable: true,
+      delayMs: 5_000,
+      reason: 'timed out',
+    };
+  }
+
+  return { retryable: false, delayMs: 0, reason: '' };
+}
