@@ -1068,6 +1068,8 @@ export class LeadsRepo {
       verdict: QualificationVerdict;
       qualificationScore: number;
       qualificationSummary: string;
+      monthlyVisits: number | null;
+      visitsSource: Lead['visitsSource'];
       trancoRank: number | null;
       hasArticles: boolean | null;
       articleCountFound: number;
@@ -1100,6 +1102,8 @@ export class LeadsRepo {
           verdict = ?,
           qualification_score = ?,
           qualification_summary = ?,
+          monthly_visits = ?,
+          visits_source = ?,
           tranco_rank = COALESCE(?, tranco_rank),
           has_articles = ?,
           article_count_found = ?,
@@ -1132,6 +1136,8 @@ export class LeadsRepo {
         data.verdict,
         data.qualificationScore,
         data.qualificationSummary,
+        data.monthlyVisits,
+        data.visitsSource,
         data.trancoRank,
         data.hasArticles === null ? null : data.hasArticles ? 1 : 0,
         data.articleCountFound,

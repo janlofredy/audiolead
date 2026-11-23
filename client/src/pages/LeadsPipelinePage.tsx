@@ -576,13 +576,22 @@ export function LeadsPipelinePage({
                               );
                             }}
                             className="rounded border border-dashed border-slate-300 px-2 py-1 text-xs font-semibold text-slate-800 hover:border-indigo-400 hover:text-indigo-700"
-                            title="Click to enter monthly visits from Similarweb"
+                            title={
+                              lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
+                                ? 'Estimated from Tranco rank — click to override with Similarweb visits'
+                                : 'Click to enter monthly visits from Similarweb'
+                            }
                           >
-                            {formatVisits(lead.monthlyVisits)}
+                            {lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
+                              ? `~${formatVisits(lead.monthlyVisits)}`
+                              : formatVisits(lead.monthlyVisits)}
                           </button>
                           {lead.trancoRank && (
                             <p className="text-[11px] text-slate-400">
                               Tranco #{lead.trancoRank.toLocaleString()}
+                              {lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
+                                ? ' · est.'
+                                : ''}
                             </p>
                           )}
                         </div>

@@ -9,6 +9,10 @@ import {
 } from '../services/scanner/contactFinder.js';
 import { scoreContactAuthority } from '../services/scanner/authorityRanker.js';
 import { evaluateQualification } from '../services/scanner/qualificationEngine.js';
+import {
+  estimateMonthlyVisitsFromTrancoRank,
+  resolveMonthlyVisitsWithTranco,
+} from '../services/scanner/trafficChecker.js';
 
 const DEFAULT_SETTINGS: AppSettings = {
   minMonthlyVisits: 50000,
@@ -287,5 +291,63 @@ describe('qualificationEngine', () => {
       hasContacts: false,
     });
     expect(hasAudio.verdict).toBe('disqualified');
+  });
+});
+
+describe('tranco traffic estimation', () => {
+  it('estimates monthly visits from Tranco rank with monotonic decrease and clean rounding', () => {
+    expect(estimateMonthlyVisitsFromTrancoRank(null)).toBeNull();
+    expect(estimateMonthlyVisitsFromTrancoRank(undefined)).toBeNull();
+    expect(estimateMonthlyVisitsFromTrancoRank(0)).toBeNull();
+    expect(estimateMonthlyVisitsFromTrancoRank(-10)).toBeNull();
+    expect(estimateMonthlyVisitsFromTrancoRank(Number.NaN)).toBeNull();
+
+    expect(estimateMonthlyVisitsFromTrancoRank(1)).toBe(50_000_000_000);
+    expect(estimateMonthlyVisitsFromTrancoRank(50_000)).toBe(1_200_000);
+    expect(estimateMonthlyVisitsFromTrancoRank(250_000)).toBe(200_000);
+    expect(estimateMonthlyVisitsFromTrancoRank(500_000)).toBe(80_000);
+    expect(estimateMonthlyVisitsFromTrancoRank(1_000_000)).toBe(30_000);
+
+    const midTier = estimateMonthlyVisitsFromTrancoRank(350_000);
+    expect(midTier).not.toBeNull();
+    expect(midTier!).toBeLessThan(200_000);
+    expect(midTier!).toBeGreaterThan(80_000);
+    expect(midTier! % 10_000).toBe(0);
+
+    const longTail = estimateMonthlyVisitsFromTrancoRank(1_500_000);
+    expect(longTail).toBe(20_000);
+    expect(estimateMonthlyVisitsFromTrancoRank(10_000_000)).toBe(5_000);
+  });
+
+  it('resolves Tranco estimates while preserving manual, Similarweb, and discovery counts', () => {
+    expect(resolveMonthlyVisitsWithTranco(null, null, 250_000)).toEqual({
+      monthlyVisits: 200_000,
+      visitsSource: 'tranco_estimate',
+    });
+
+    expect(resolveMonthlyVisitsWithTranco(200_000, 'tranco_estimate', 500_000)).toEqual({
+      monthlyVisits: 80_000,
+      visitsSource: 'tranco_estimate',
+    });
+
+    expect(resolveMonthlyVisitsWithTranco(200_000, 'tranco_estimate', null)).toEqual({
+      monthlyVisits: null,
+      visitsSource: null,
+    });
+
+    expect(resolveMonthlyVisitsWithTranco(145_000, 'manual', 250_000)).toEqual({
+      monthlyVisits: 145_000,
+      visitsSource: 'manual',
+    });
+
+    expect(resolveMonthlyVisitsWithTranco(420_500, 'similarweb_paste', 250_000)).toEqual({
+      monthlyVisits: 420_500,
+      visitsSource: 'similarweb_paste',
+    });
+
+    expect(resolveMonthlyVisitsWithTranco(85_000, 'discovery', 250_000)).toEqual({
+      monthlyVisits: 85_000,
+      visitsSource: 'discovery',
+    });
   });
 });

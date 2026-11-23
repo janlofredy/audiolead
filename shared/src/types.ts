@@ -156,7 +156,7 @@ export interface Lead {
   qualificationSummary: string | null;
 
   monthlyVisits: number | null;
-  visitsSource: 'manual' | 'similarweb_paste' | 'discovery' | null;
+  visitsSource: 'manual' | 'similarweb_paste' | 'discovery' | 'tranco_estimate' | null;
   trancoRank: number | null;
 
   hasArticles: boolean | null;

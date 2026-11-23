@@ -14,7 +14,7 @@ import { detectLanguageAndCountry } from './languageDetector.js';
 import { analyzeArticles } from './articleDetector.js';
 import { detectAudioPlayersFromHtml } from './audioDetector.js';
 import { analyzeAds } from './adDetector.js';
-import { lookupTrancoRank } from './trafficChecker.js';
+import { lookupTrancoRank, resolveMonthlyVisitsWithTranco } from './trafficChecker.js';
 import { crawlSiteContacts } from './contactFinder.js';
 import { evaluateQualification } from './qualificationEngine.js';
 import { mineOutboundSuggestions } from '../discovery/outboundMiner.js';
@@ -195,6 +195,11 @@ export class ScanOrchestrator {
     }
 
     const trancoRank = await lookupTrancoRank(this.db, lead.domain);
+    const resolvedTraffic = resolveMonthlyVisitsWithTranco(
+      lead.monthlyVisits,
+      lead.visitsSource,
+      trancoRank,
+    );
 
     if (!homeRes.ok) {
       const qual = evaluateQualification({
@@ -210,7 +215,7 @@ export class ScanOrchestrator {
         audioProvidersDetected: [],
         detectedLanguage: null,
         detectedCountry: null,
-        monthlyVisits: lead.monthlyVisits,
+        monthlyVisits: resolvedTraffic.monthlyVisits,
         hasContacts: lead.contactCount > 0,
       });
 
@@ -222,6 +227,8 @@ export class ScanOrchestrator {
         verdict: qual.verdict,
         qualificationScore: qual.score,
         qualificationSummary: qual.summary,
+        monthlyVisits: resolvedTraffic.monthlyVisits,
+        visitsSource: resolvedTraffic.visitsSource,
         trancoRank,
         hasArticles: null,
         articleCountFound: 0,
@@ -309,7 +316,7 @@ export class ScanOrchestrator {
       audioProvidersDetected: audioResult.providersDetected,
       detectedLanguage: langResult.language,
       detectedCountry: langResult.country,
-      monthlyVisits: lead.monthlyVisits,
+      monthlyVisits: resolvedTraffic.monthlyVisits,
       hasContacts: hasUsableContact,
     });
 
@@ -321,6 +328,8 @@ export class ScanOrchestrator {
       verdict: qual.verdict,
       qualificationScore: qual.score,
       qualificationSummary: qual.summary,
+      monthlyVisits: resolvedTraffic.monthlyVisits,
+      visitsSource: resolvedTraffic.visitsSource,
       trancoRank,
       hasArticles: articleAnalysis.hasArticles,
       articleCountFound: articleAnalysis.articleCountFound,

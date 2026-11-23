@@ -5,9 +5,11 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createDatabase } from './db/index.js';
 import { createApp } from './app.js';
+import { backfillTrancoVisitEstimates } from './services/suppression/reconcile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const db = createDatabase();
+backfillTrancoVisitEstimates(db);
 const app = createApp(db);
 
 // Resolve compiled client/dist in both tsx dev and compiled node dist/

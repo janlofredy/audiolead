@@ -3,6 +3,8 @@ import { createDatabase } from '../db/index.js';
 import { createApp } from '../app.js';
 import { parseSimilarwebPaste } from '../services/discovery/similarwebParser.js';
 import { addDaysToIsoDate, todayIsoDate } from '../services/scanner/domainUtils.js';
+import { LeadsRepo } from '../db/repositories.js';
+import { backfillTrancoVisitEstimates } from '../services/suppression/reconcile.js';
 
 describe('discovery, suppression & API integration', () => {
   it('parses Similarweb paste text and tags suppression/pipeline state accurately', () => {
@@ -120,5 +122,93 @@ describe('discovery, suppression & API integration', () => {
     const tsvAfter = await exportAfter.text();
     expect(tsvAfter).not.toContain('freshpublisher.com');
     expect(tsvAfter).toContain('expiredcooldown.com');
+  });
+
+  it('backfills estimated monthly visits from Tranco rank and updates qualification', () => {
+    const db = createDatabase(':memory:');
+    const leadsRepo = new LeadsRepo(db);
+    const { createdIds } = leadsRepo.createPending([
+      { domain: 'ranked-site.com', discoverySource: 'Niche' },
+      { domain: 'manual-site.com', monthlyVisits: 95_000, visitsSource: 'manual', discoverySource: 'Niche' },
+    ]);
+
+    const [rankedId, manualId] = createdIds;
+
+    leadsRepo.updateScanResult(rankedId, {
+      url: 'https://ranked-site.com',
+      siteTitle: 'Ranked Site',
+      description: null,
+      status: 'review',
+      verdict: 'review',
+      qualificationScore: 90,
+      qualificationSummary: 'Needs traffic check',
+      monthlyVisits: null,
+      visitsSource: null,
+      trancoRank: 250_000,
+      hasArticles: true,
+      articleCountFound: 10,
+      latestArticleDate: todayIsoDate(),
+      avgArticleWords: 800,
+      sampleArticleUrls: [],
+      rssFeedUrl: null,
+      sitemapUrl: null,
+      hasAds: true,
+      hasAdsTxt: true,
+      adsTxtEntries: 5,
+      adNetworksDetected: ['Google AdSense'],
+      hasAudioPlayer: false,
+      audioProvidersDetected: [],
+      audioEvidence: null,
+      detectedLanguage: 'en',
+      detectedCountry: 'US',
+      keywords: [],
+      blockedByBotProtection: false,
+      lastError: null,
+    });
+
+    leadsRepo.updateScanResult(manualId, {
+      url: 'https://manual-site.com',
+      siteTitle: 'Manual Site',
+      description: null,
+      status: 'qualified',
+      verdict: 'qualified',
+      qualificationScore: 100,
+      qualificationSummary: 'Traffic meets threshold',
+      monthlyVisits: 95_000,
+      visitsSource: 'manual',
+      trancoRank: 250_000,
+      hasArticles: true,
+      articleCountFound: 10,
+      latestArticleDate: todayIsoDate(),
+      avgArticleWords: 800,
+      sampleArticleUrls: [],
+      rssFeedUrl: null,
+      sitemapUrl: null,
+      hasAds: true,
+      hasAdsTxt: true,
+      adsTxtEntries: 5,
+      adNetworksDetected: ['Google AdSense'],
+      hasAudioPlayer: false,
+      audioProvidersDetected: [],
+      audioEvidence: null,
+      detectedLanguage: 'en',
+      detectedCountry: 'US',
+      keywords: [],
+      blockedByBotProtection: false,
+      lastError: null,
+    });
+
+    const updated = backfillTrancoVisitEstimates(db);
+    expect(updated).toBe(1);
+
+    const rankedLead = leadsRepo.getById(rankedId, 90);
+    expect(rankedLead?.monthlyVisits).toBe(200_000);
+    expect(rankedLead?.visitsSource).toBe('tranco_estimate');
+    expect(rankedLead?.verdict).toBe('qualified');
+    expect(rankedLead?.status).toBe('qualified');
+
+    const manualLead = leadsRepo.getById(manualId, 90);
+    expect(manualLead?.monthlyVisits).toBe(95_000);
+    expect(manualLead?.visitsSource).toBe('manual');
   });
 });

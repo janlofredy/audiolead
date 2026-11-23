@@ -386,7 +386,11 @@ export function LeadDetailDialog({
                   className="app-input mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-slate-500">
-                  Current: {formatVisits(lead.monthlyVisits)} · Updates qualification automatically
+                  Current:{' '}
+                  {lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
+                    ? `~${formatVisits(lead.monthlyVisits)} (Tranco estimate)`
+                    : formatVisits(lead.monthlyVisits)}{' '}
+                  · Updates qualification automatically
                 </p>
               </div>
               <div>
