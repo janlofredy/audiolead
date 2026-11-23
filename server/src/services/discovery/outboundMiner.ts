@@ -2,8 +2,8 @@ import type { AppDatabase } from '../../db/index.js';
 import { SuggestionsRepo } from '../../db/repositories.js';
 import { normalizeDomain } from '../scanner/domainUtils.js';
 import {
-  estimateMonthlyVisitsFromTrancoRank,
-  lookupTrancoRank,
+  lookupTrafficWaterfall,
+  type TrafficWaterfallSettings,
 } from '../scanner/trafficChecker.js';
 import { isBlockedCandidateDomain } from './blocklists.js';
 
@@ -16,6 +16,7 @@ export async function mineOutboundSuggestions(
     excludeMegaPublishers: boolean;
     cooldownDays: number;
     minMonthlyVisits: number;
+    trafficSettings?: TrafficWaterfallSettings;
   },
 ): Promise<number> {
   const candidates = new Map<string, string>();
@@ -41,13 +42,18 @@ export async function mineOutboundSuggestions(
     estimatedVisits: number | null;
   }> = [];
 
+  const waterfallSettings: TrafficWaterfallSettings = input.trafficSettings ?? {
+    openPageRankApiKey: '',
+    cloudflareRadarApiToken: '',
+    googleCruxApiKey: '',
+  };
+
   for (let i = 0; i < entries.length; i += 4) {
     const batch = entries.slice(i, i + 4);
     const resolved = await Promise.all(
       batch.map(async ([domain, sampleUrl]) => {
-        const rank = await lookupTrancoRank(db, domain);
-        const estimatedVisits = estimateMonthlyVisitsFromTrancoRank(rank);
-        return { domain, sampleUrl, estimatedVisits };
+        const traffic = await lookupTrafficWaterfall(db, domain, waterfallSettings);
+        return { domain, sampleUrl, estimatedVisits: traffic.monthlyVisits };
       }),
     );
     for (const item of resolved) {

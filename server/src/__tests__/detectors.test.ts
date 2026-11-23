@@ -11,9 +11,13 @@ import { scoreContactAuthority } from '../services/scanner/authorityRanker.js';
 import { evaluateQualification } from '../services/scanner/qualificationEngine.js';
 import * as cheerio from 'cheerio';
 import {
+  estimateMonthlyVisitsFromOpenPageRank,
   estimateMonthlyVisitsFromTrancoRank,
+  lookupTrafficWaterfall,
   resolveMonthlyVisitsWithTranco,
 } from '../services/scanner/trafficChecker.js';
+import { createDatabase } from '../db/index.js';
+import { TrafficCacheRepo, TrancoRepo } from '../db/repositories.js';
 import {
   detectParentCompany,
   normalizeCompanyName,
@@ -35,6 +39,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   apolloApiKey: '',
   serperApiKey: '',
   braveApiKey: '',
+  openPageRankApiKey: '',
+  cloudflareRadarApiToken: '',
+  googleCruxApiKey: '',
   llmProvider: 'none',
   llmApiKey: '',
   llmModel: '',
@@ -433,5 +440,75 @@ describe('parentCompanyDetector & retryable fetch classification', () => {
         error: 'Blocked by bot protection (HTTP 403)',
       }).retryable,
     ).toBe(false);
+  });
+
+  it('estimates visits from Open PageRank and executes traffic waterfall in priority order', async () => {
+    expect(estimateMonthlyVisitsFromOpenPageRank(250_000, 4.1)).toBe(200_000);
+    expect(estimateMonthlyVisitsFromOpenPageRank(null, 5.8)).toBe(600_000);
+    expect(estimateMonthlyVisitsFromOpenPageRank(null, 3.6)).toBe(50_000);
+    expect(estimateMonthlyVisitsFromOpenPageRank(null, 1.0)).toBeNull();
+
+    const db = createDatabase(':memory:');
+    const tranco = new TrancoRepo(db);
+    const cache = new TrafficCacheRepo(db);
+
+    // 1. Tranco wins when present
+    tranco.setCached('tranco-site.com', 100_000);
+    cache.setCached('tranco-site.com', 'openpagerank', 999_000, null);
+    await expect(
+      lookupTrafficWaterfall(db, 'tranco-site.com', {
+        openPageRankApiKey: 'opr-key',
+        cloudflareRadarApiToken: 'cf-token',
+        googleCruxApiKey: 'crux-key',
+      }),
+    ).resolves.toEqual({
+      trancoRank: 100_000,
+      monthlyVisits: 600_000,
+      visitsSource: 'tranco_estimate',
+    });
+
+    // 2. Open PageRank fallback when Tranco is null and key is configured
+    tranco.setCached('opr-site.com', null);
+    cache.setCached('opr-site.com', 'openpagerank', 150_000, 300_000);
+    cache.setCached('opr-site.com', 'cloudflare_radar', 80_000, 500_000);
+    await expect(
+      lookupTrafficWaterfall(db, 'opr-site.com', {
+        openPageRankApiKey: 'opr-key',
+        cloudflareRadarApiToken: 'cf-token',
+        googleCruxApiKey: 'crux-key',
+      }),
+    ).resolves.toEqual({
+      trancoRank: null,
+      monthlyVisits: 150_000,
+      visitsSource: 'openpagerank_estimate',
+    });
+
+    // 3. Skips Open PageRank when key is empty, falling back to Cloudflare Radar
+    await expect(
+      lookupTrafficWaterfall(db, 'opr-site.com', {
+        openPageRankApiKey: '',
+        cloudflareRadarApiToken: 'cf-token',
+        googleCruxApiKey: 'crux-key',
+      }),
+    ).resolves.toEqual({
+      trancoRank: null,
+      monthlyVisits: 80_000,
+      visitsSource: 'cloudflare_radar_estimate',
+    });
+
+    // 4. Falls back to Google CrUX when only CrUX key is configured
+    cache.setCached('crux-only.com', 'crux', 50_000, null);
+    tranco.setCached('crux-only.com', null);
+    await expect(
+      lookupTrafficWaterfall(db, 'crux-only.com', {
+        openPageRankApiKey: '',
+        cloudflareRadarApiToken: '',
+        googleCruxApiKey: 'crux-key',
+      }),
+    ).resolves.toEqual({
+      trancoRank: null,
+      monthlyVisits: 50_000,
+      visitsSource: 'crux_estimate',
+    });
   });
 });

@@ -112,6 +112,9 @@ interface RawSettingsRow {
   apollo_api_key: string;
   serper_api_key: string;
   brave_api_key: string;
+  open_pagerank_api_key: string;
+  cloudflare_radar_api_token: string;
+  google_crux_api_key: string;
   llm_provider: string;
   llm_api_key: string;
   llm_model: string;
@@ -137,6 +140,9 @@ export class SettingsRepo {
       apolloApiKey: row.apollo_api_key,
       serperApiKey: row.serper_api_key,
       braveApiKey: row.brave_api_key,
+      openPageRankApiKey: row.open_pagerank_api_key ?? '',
+      cloudflareRadarApiToken: row.cloudflare_radar_api_token ?? '',
+      googleCruxApiKey: row.google_crux_api_key ?? '',
       llmProvider: (row.llm_provider || 'none') as LlmProvider,
       llmApiKey: row.llm_api_key,
       llmModel: row.llm_model,
@@ -149,6 +155,9 @@ export class SettingsRepo {
     const apollo = maskSecret(s.apolloApiKey);
     const serper = maskSecret(s.serperApiKey);
     const brave = maskSecret(s.braveApiKey);
+    const openPageRank = maskSecret(s.openPageRankApiKey);
+    const cloudflareRadar = maskSecret(s.cloudflareRadarApiToken);
+    const googleCrux = maskSecret(s.googleCruxApiKey);
     const llm = maskSecret(s.llmApiKey);
 
     return {
@@ -170,6 +179,12 @@ export class SettingsRepo {
       serperApiKeyPreview: serper.preview,
       braveApiKeySet: brave.set,
       braveApiKeyPreview: brave.preview,
+      openPageRankApiKeySet: openPageRank.set,
+      openPageRankApiKeyPreview: openPageRank.preview,
+      cloudflareRadarApiTokenSet: cloudflareRadar.set,
+      cloudflareRadarApiTokenPreview: cloudflareRadar.preview,
+      googleCruxApiKeySet: googleCrux.set,
+      googleCruxApiKeyPreview: googleCrux.preview,
       llmProvider: s.llmProvider,
       llmApiKeySet: llm.set,
       llmApiKeyPreview: llm.preview,
@@ -218,6 +233,12 @@ export class SettingsRepo {
       apolloApiKey: resolveKey(patch.apolloApiKey, current.apolloApiKey),
       serperApiKey: resolveKey(patch.serperApiKey, current.serperApiKey),
       braveApiKey: resolveKey(patch.braveApiKey, current.braveApiKey),
+      openPageRankApiKey: resolveKey(patch.openPageRankApiKey, current.openPageRankApiKey),
+      cloudflareRadarApiToken: resolveKey(
+        patch.cloudflareRadarApiToken,
+        current.cloudflareRadarApiToken,
+      ),
+      googleCruxApiKey: resolveKey(patch.googleCruxApiKey, current.googleCruxApiKey),
       llmProvider: patch.llmProvider ?? current.llmProvider,
       llmApiKey: resolveKey(patch.llmApiKey, current.llmApiKey),
       llmModel: patch.llmModel !== undefined ? patch.llmModel.trim() : current.llmModel,
@@ -240,6 +261,9 @@ export class SettingsRepo {
           apollo_api_key = ?,
           serper_api_key = ?,
           brave_api_key = ?,
+          open_pagerank_api_key = ?,
+          cloudflare_radar_api_token = ?,
+          google_crux_api_key = ?,
           llm_provider = ?,
           llm_api_key = ?,
           llm_model = ?,
@@ -261,6 +285,9 @@ export class SettingsRepo {
         next.apolloApiKey,
         next.serperApiKey,
         next.braveApiKey,
+        next.openPageRankApiKey,
+        next.cloudflareRadarApiToken,
+        next.googleCruxApiKey,
         next.llmProvider,
         next.llmApiKey,
         next.llmModel,
@@ -1701,5 +1728,47 @@ export class TrancoRepo {
          ON CONFLICT(domain) DO UPDATE SET rank = excluded.rank, fetched_at = datetime('now')`,
       )
       .run(domain.toLowerCase(), rank);
+  }
+}
+
+export class TrafficCacheRepo {
+  constructor(private db: AppDatabase) {}
+
+  getCached(
+    domain: string,
+    provider: string,
+  ): { found: boolean; estimatedVisits: number | null; rawRank: number | null } {
+    const row = this.db
+      .prepare(
+        `SELECT estimated_visits, raw_rank FROM traffic_cache
+         WHERE domain = ? AND provider = ? AND datetime(fetched_at) > datetime('now', '-30 days')`,
+      )
+      .get(domain.toLowerCase(), provider) as
+      | { estimated_visits: number | null; raw_rank: number | null }
+      | undefined;
+    if (!row) return { found: false, estimatedVisits: null, rawRank: null };
+    return {
+      found: true,
+      estimatedVisits: row.estimated_visits,
+      rawRank: row.raw_rank,
+    };
+  }
+
+  setCached(
+    domain: string,
+    provider: string,
+    estimatedVisits: number | null,
+    rawRank: number | null = null,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO traffic_cache (domain, provider, estimated_visits, raw_rank, fetched_at)
+         VALUES (?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(domain, provider) DO UPDATE SET
+           estimated_visits = excluded.estimated_visits,
+           raw_rank = excluded.raw_rank,
+           fetched_at = datetime('now')`,
+      )
+      .run(domain.toLowerCase(), provider, estimatedVisits, rawRank);
   }
 }

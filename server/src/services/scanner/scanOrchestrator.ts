@@ -14,7 +14,10 @@ import { detectLanguageAndCountry } from './languageDetector.js';
 import { analyzeArticles } from './articleDetector.js';
 import { detectAudioPlayersFromHtml } from './audioDetector.js';
 import { analyzeAds } from './adDetector.js';
-import { lookupTrancoRank, resolveMonthlyVisitsWithTranco } from './trafficChecker.js';
+import {
+  isEstimatedVisitsSource,
+  lookupTrafficWaterfall,
+} from './trafficChecker.js';
 import { crawlSiteContacts } from './contactFinder.js';
 import { evaluateQualification } from './qualificationEngine.js';
 import { detectParentCompany } from './parentCompanyDetector.js';
@@ -255,12 +258,13 @@ export class ScanOrchestrator {
       }
     }
 
-    const trancoRank = await lookupTrancoRank(this.db, lead.domain);
-    const resolvedTraffic = resolveMonthlyVisitsWithTranco(
-      lead.monthlyVisits,
-      lead.visitsSource,
-      trancoRank,
-    );
+    const preserveExplicitTraffic =
+      lead.monthlyVisits !== null && !isEstimatedVisitsSource(lead.visitsSource);
+    const waterfall = await lookupTrafficWaterfall(this.db, lead.domain, settings);
+    const trancoRank = waterfall.trancoRank;
+    const resolvedTraffic = preserveExplicitTraffic
+      ? { monthlyVisits: lead.monthlyVisits, visitsSource: lead.visitsSource }
+      : { monthlyVisits: waterfall.monthlyVisits, visitsSource: waterfall.visitsSource };
 
     if (!homeRes.ok) {
       const qual = evaluateQualification({
@@ -429,6 +433,7 @@ export class ScanOrchestrator {
       excludeMegaPublishers: settings.excludeMegaPublishers,
       cooldownDays: settings.contactedCooldownDays,
       minMonthlyVisits: settings.minMonthlyVisits,
+      trafficSettings: settings,
     });
   }
 }

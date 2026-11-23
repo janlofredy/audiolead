@@ -40,6 +40,9 @@ function runMigrations(db: AppDatabase): void {
       apollo_api_key TEXT NOT NULL DEFAULT '',
       serper_api_key TEXT NOT NULL DEFAULT '',
       brave_api_key TEXT NOT NULL DEFAULT '',
+      open_pagerank_api_key TEXT NOT NULL DEFAULT '',
+      cloudflare_radar_api_token TEXT NOT NULL DEFAULT '',
+      google_crux_api_key TEXT NOT NULL DEFAULT '',
       llm_provider TEXT NOT NULL DEFAULT 'none',
       llm_api_key TEXT NOT NULL DEFAULT '',
       llm_model TEXT NOT NULL DEFAULT '',
@@ -168,7 +171,27 @@ function runMigrations(db: AppDatabase): void {
       rank INTEGER,
       fetched_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS traffic_cache (
+      domain TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      estimated_visits INTEGER,
+      raw_rank INTEGER,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (domain, provider)
+    );
   `);
+
+  const settingsCols = db.prepare('PRAGMA table_info(settings)').all() as Array<{ name: string }>;
+  for (const col of [
+    'open_pagerank_api_key',
+    'cloudflare_radar_api_token',
+    'google_crux_api_key',
+  ]) {
+    if (!settingsCols.some((c) => c.name === col)) {
+      db.exec(`ALTER TABLE settings ADD COLUMN ${col} TEXT NOT NULL DEFAULT '';`);
+    }
+  }
 
   const leadCols = db.prepare('PRAGMA table_info(leads)').all() as Array<{ name: string }>;
   if (!leadCols.some((c) => c.name === 'parent_company')) {

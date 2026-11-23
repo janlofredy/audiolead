@@ -1,10 +1,31 @@
-import type { AuthorityTier, LeadStatus, QualificationVerdict, SuppressionCheckResult } from '@audiolead/shared';
+import type {
+  AuthorityTier,
+  Lead,
+  LeadStatus,
+  QualificationVerdict,
+  SuppressionCheckResult,
+} from '@audiolead/shared';
 
 export function formatVisits(visits: number | null | undefined): string {
   if (visits === null || visits === undefined) return 'Unknown';
   if (visits >= 1_000_000) return `${(visits / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   if (visits >= 1_000) return `${(visits / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
   return visits.toLocaleString();
+}
+
+export function visitsSourceLabel(source: Lead['visitsSource']): string | null {
+  switch (source) {
+    case 'tranco_estimate':
+      return 'Tranco';
+    case 'openpagerank_estimate':
+      return 'Open PageRank';
+    case 'cloudflare_radar_estimate':
+      return 'CF Radar';
+    case 'crux_estimate':
+      return 'Google CrUX';
+    default:
+      return null;
+  }
 }
 
 export function similarwebLink(domain: string, tab: 'overview' | 'competitors' = 'overview'): string {

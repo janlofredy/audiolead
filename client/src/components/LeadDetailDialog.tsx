@@ -16,7 +16,13 @@ import {
 import type { LeadWithContacts } from '@audiolead/shared';
 import { api } from '../api/client';
 import { NativeDialog } from './NativeDialog';
-import { authorityTierLabel, formatVisits, similarwebLink, verdictMeta } from '../utils/formatters';
+import {
+  authorityTierLabel,
+  formatVisits,
+  similarwebLink,
+  verdictMeta,
+  visitsSourceLabel,
+} from '../utils/formatters';
 
 interface LeadDetailDialogProps {
   leadId: string | null;
@@ -390,8 +396,8 @@ export function LeadDetailDialog({
                 />
                 <p className="mt-1 text-xs text-slate-500">
                   Current:{' '}
-                  {lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
-                    ? `~${formatVisits(lead.monthlyVisits)} (Tranco estimate)`
+                  {lead.monthlyVisits !== null && visitsSourceLabel(lead.visitsSource)
+                    ? `~${formatVisits(lead.monthlyVisits)} (${visitsSourceLabel(lead.visitsSource)} estimate)`
                     : formatVisits(lead.monthlyVisits)}{' '}
                   · Updates qualification automatically
                 </p>

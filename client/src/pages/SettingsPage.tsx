@@ -28,6 +28,9 @@ export function SettingsPage({ onSettingsSaved, onNotify }: SettingsPageProps) {
   const [apolloApiKey, setApolloApiKey] = useState('');
   const [serperApiKey, setSerperApiKey] = useState('');
   const [braveApiKey, setBraveApiKey] = useState('');
+  const [openPageRankApiKey, setOpenPageRankApiKey] = useState('');
+  const [cloudflareRadarApiToken, setCloudflareRadarApiToken] = useState('');
+  const [googleCruxApiKey, setGoogleCruxApiKey] = useState('');
   const [llmProvider, setLlmProvider] = useState<LlmProvider>('none');
   const [llmApiKey, setLlmApiKey] = useState('');
   const [llmModel, setLlmModel] = useState('');
@@ -49,6 +52,9 @@ export function SettingsPage({ onSettingsSaved, onNotify }: SettingsPageProps) {
     setApolloApiKey(s.apolloApiKeyPreview);
     setSerperApiKey(s.serperApiKeyPreview);
     setBraveApiKey(s.braveApiKeyPreview);
+    setOpenPageRankApiKey(s.openPageRankApiKeyPreview);
+    setCloudflareRadarApiToken(s.cloudflareRadarApiTokenPreview);
+    setGoogleCruxApiKey(s.googleCruxApiKeyPreview);
     setLlmProvider(s.llmProvider);
     setLlmApiKey(s.llmApiKeyPreview);
     setLlmModel(s.llmModel);
@@ -92,6 +98,9 @@ export function SettingsPage({ onSettingsSaved, onNotify }: SettingsPageProps) {
         apolloApiKey,
         serperApiKey,
         braveApiKey,
+        openPageRankApiKey,
+        cloudflareRadarApiToken,
+        googleCruxApiKey,
         llmProvider,
         llmApiKey,
         llmModel,
@@ -369,6 +378,40 @@ export function SettingsPage({ onSettingsSaved, onNotify }: SettingsPageProps) {
             setBraveApiKey,
             'Optional Brave API key',
           )}
+        </div>
+
+        <div className="pt-2 space-y-3 border-t border-slate-100">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+              Traffic Estimate Fallbacks (Auto-Enabled When Set)
+            </h3>
+            <p className="text-xs text-slate-500">
+              Used automatically in order whenever Tranco has no rank for a website: Tranco → Open PageRank → Cloudflare Radar → Google CrUX.
+            </p>
+          </div>
+          <div className="grid items-end gap-4 sm:grid-cols-3">
+            {renderSecretField(
+              'key-openpagerank',
+              'Open PageRank API Key (Free at openpagerank.com)',
+              openPageRankApiKey,
+              setOpenPageRankApiKey,
+              'Optional Open PageRank key',
+            )}
+            {renderSecretField(
+              'key-cf-radar',
+              'Cloudflare Radar API Token',
+              cloudflareRadarApiToken,
+              setCloudflareRadarApiToken,
+              'Optional Cloudflare Radar token',
+            )}
+            {renderSecretField(
+              'key-google-crux',
+              'Google CrUX API Key',
+              googleCruxApiKey,
+              setGoogleCruxApiKey,
+              'Optional Google CrUX key',
+            )}
+          </div>
         </div>
 
         <div className="grid items-end gap-4 pt-2 sm:grid-cols-2 lg:grid-cols-3">

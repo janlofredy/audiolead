@@ -15,6 +15,9 @@ export interface AppSettings {
   apolloApiKey: string;
   serperApiKey: string;
   braveApiKey: string;
+  openPageRankApiKey: string;
+  cloudflareRadarApiToken: string;
+  googleCruxApiKey: string;
   llmProvider: LlmProvider;
   llmApiKey: string;
   llmModel: string;
@@ -39,6 +42,12 @@ export interface MaskedAppSettings {
   serperApiKeyPreview: string;
   braveApiKeySet: boolean;
   braveApiKeyPreview: string;
+  openPageRankApiKeySet: boolean;
+  openPageRankApiKeyPreview: string;
+  cloudflareRadarApiTokenSet: boolean;
+  cloudflareRadarApiTokenPreview: string;
+  googleCruxApiKeySet: boolean;
+  googleCruxApiKeyPreview: string;
   llmProvider: LlmProvider;
   llmApiKeySet: boolean;
   llmApiKeyPreview: string;
@@ -60,6 +69,9 @@ export interface UpdateSettingsPayload {
   apolloApiKey?: string;
   serperApiKey?: string;
   braveApiKey?: string;
+  openPageRankApiKey?: string;
+  cloudflareRadarApiToken?: string;
+  googleCruxApiKey?: string;
   llmProvider?: LlmProvider;
   llmApiKey?: string;
   llmModel?: string;
@@ -173,7 +185,15 @@ export interface Lead {
   qualificationSummary: string | null;
 
   monthlyVisits: number | null;
-  visitsSource: 'manual' | 'similarweb_paste' | 'discovery' | 'tranco_estimate' | null;
+  visitsSource:
+    | 'manual'
+    | 'similarweb_paste'
+    | 'discovery'
+    | 'tranco_estimate'
+    | 'openpagerank_estimate'
+    | 'cloudflare_radar_estimate'
+    | 'crux_estimate'
+    | null;
   trancoRank: number | null;
 
   hasArticles: boolean | null;

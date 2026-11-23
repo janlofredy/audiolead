@@ -23,6 +23,7 @@ import {
   formatVisits,
   similarwebLink,
   verdictMeta,
+  visitsSourceLabel,
 } from '../utils/formatters';
 
 type SortKey = 'domain' | 'score' | 'visits' | 'contact' | 'status';
@@ -589,35 +590,39 @@ export function LeadsPipelinePage({
                           className="app-input w-24 rounded border border-indigo-400 px-2 py-1 text-xs"
                         />
                       ) : (
-                        <div className="space-y-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingVisitsId(lead.id);
-                              setEditingVisitsValue(
-                                lead.monthlyVisits !== null ? String(lead.monthlyVisits) : '',
-                              );
-                            }}
-                            className="rounded border border-dashed border-slate-300 px-2 py-1 text-xs font-semibold text-slate-800 hover:border-indigo-400 hover:text-indigo-700"
-                            title={
-                              lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
-                                ? 'Estimated from Tranco rank — click to override with Similarweb visits'
-                                : 'Click to enter monthly visits from Similarweb'
-                            }
-                          >
-                            {lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
-                              ? `~${formatVisits(lead.monthlyVisits)}`
-                              : formatVisits(lead.monthlyVisits)}
-                          </button>
-                          {lead.trancoRank && (
-                            <p className="text-[11px] text-slate-400">
-                              Tranco #{lead.trancoRank.toLocaleString()}
-                              {lead.visitsSource === 'tranco_estimate' && lead.monthlyVisits !== null
-                                ? ' · est.'
-                                : ''}
-                            </p>
-                          )}
-                        </div>
+                        (() => {
+                          const estLabel =
+                            lead.monthlyVisits !== null ? visitsSourceLabel(lead.visitsSource) : null;
+                          return (
+                            <div className="space-y-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingVisitsId(lead.id);
+                                  setEditingVisitsValue(
+                                    lead.monthlyVisits !== null ? String(lead.monthlyVisits) : '',
+                                  );
+                                }}
+                                className="rounded border border-dashed border-slate-300 px-2 py-1 text-xs font-semibold text-slate-800 hover:border-indigo-400 hover:text-indigo-700"
+                                title={
+                                  estLabel
+                                    ? `Estimated from ${estLabel} — click to override with Similarweb visits`
+                                    : 'Click to enter monthly visits from Similarweb'
+                                }
+                              >
+                                {estLabel ? `~${formatVisits(lead.monthlyVisits)}` : formatVisits(lead.monthlyVisits)}
+                              </button>
+                              {lead.trancoRank ? (
+                                <p className="text-[11px] text-slate-400">
+                                  Tranco #{lead.trancoRank.toLocaleString()}
+                                  {estLabel === 'Tranco' ? ' · est.' : ''}
+                                </p>
+                              ) : estLabel ? (
+                                <p className="text-[11px] text-slate-400">{estLabel} · est.</p>
+                              ) : null}
+                            </div>
+                          );
+                        })()
                       )}
                     </td>
 
